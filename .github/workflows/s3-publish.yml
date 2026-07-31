@@ -1,0 +1,158 @@
+name: Publish catalog to S3
+
+# Pushes the signed catalog to S3. A CDN in front of the bucket comes later; the
+# object layout below is chosen so that adding one does not require changing
+# either the paths or the client.
+#
+# Not wired until the two repository variables exist. Until then this workflow is
+# manual-only and exits early with a clear message rather than failing obscurely:
+#   AWS_ROLE_ARN   - role assumed via GitHub OIDC (see docs/distribution.md)
+#   CATALOG_BUCKET - destination bucket
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "catalog/**"
+      - "schema/**"
+      - "keys/**"
+      - "tools/**"
+      - ".github/workflows/s3-publish.yml"
+
+# id-token is what lets the job assume the role without a stored access key.
+# Long-lived AWS keys in secrets are the thing this avoids.
+permissions:
+  contents: read
+  id-token: write
+
+# A publish is read-modify-write on the rolling pointer, so overlapping runs
+# could interleave and leave the pointer describing neither revision. Never
+# cancel one midway either: a cancelled run can leave the immutable copy present
+# but the pointer stale.
+concurrency:
+  group: s3-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check distribution is configured
+        id: cfg
+        env:
+          ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+        run: |
+          if [ -z "${ROLE_ARN:-}" ] || [ -z "${BUCKET:-}" ]; then
+            echo "::notice::AWS_ROLE_ARN / CATALOG_BUCKET not set; skipping upload." \
+                 "See docs/distribution.md for the bucket and role this expects."
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        if: steps.cfg.outputs.ready == 'true'
+        run: pip install -r tools/requirements.txt pytest
+
+      # The artifact about to be signed is whatever is on disk now, so the gate
+      # runs here rather than trusting that main was green when it merged.
+      - name: Contract and pipeline tests
+        if: steps.cfg.outputs.ready == 'true'
+        run: pytest tests/ -q
+
+      - name: Publish (signed)
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          SIGNING_KEY_PEM: ${{ secrets.REGISTRY_SIGNING_KEY }}
+        run: |
+          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
+            echo "::error::REGISTRY_SIGNING_KEY is not configured; refusing to" \
+                 "publish an unsigned catalog."
+            exit 1
+          fi
+          umask 077
+          keyfile="$(mktemp)"
+          printf '%s' "$SIGNING_KEY_PEM" > "$keyfile"
+          KIROCREW_REGISTRY_SIGNING_KEY="$keyfile" python tools/publish.py --out dist
+          shred -u "$keyfile" 2>/dev/null || : > "$keyfile"
+
+      # Verify against the PUBLIC key committed to this repository, not against
+      # the signer's own output. This is the check that catches a signature
+      # minted over different bytes than the file about to be uploaded.
+      - name: Verify signatures before upload
+        if: steps.cfg.outputs.ready == 'true'
+        run: python tools/verify_dist.py dist
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-east-1
+
+      # Two-stage upload, and the ORDER matters.
+      #
+      # The immutable per-revision copy goes first, so the rolling pointer never
+      # names a revision that is not yet retrievable. A reader who follows the
+      # pointer mid-publish then gets the previous revision -- stale, but whole
+      # and correctly signed -- instead of a 404.
+      #
+      # Per-revision objects are write-once and cached hard. Re-publishing a
+      # revision key with different bytes is what causes edge caches to disagree:
+      # some serve old bytes while a fresh pointer advertises the new digest, and
+      # signature checks then fail for some readers and not others. The revision
+      # id is content-derived, so identical content reuses the key harmlessly and
+      # changed content gets a new one.
+      - name: Upload immutable revision
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+        run: |
+          REV="$(python -c "import json;print(json.load(open('dist/official-registry.json'))['revision'])")"
+          echo "revision=$REV"
+          aws s3 sync dist "s3://${BUCKET}/revisions/${REV}/" \
+            --exclude "index.html" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/json" \
+            --no-progress
+          echo "REV=$REV" >> "$GITHUB_ENV"
+
+      # The rolling pointer clients actually fetch. no-store because a cached
+      # pointer is exactly how a client keeps missing a tombstone -- and a
+      # withdrawn app that stays visible is the failure this catalog is built to
+      # avoid.
+      - name: Update rolling pointer
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+        run: |
+          aws s3 sync dist "s3://${BUCKET}/" \
+            --exclude "index.html" \
+            --cache-control "no-store, max-age=0" \
+            --content-type "application/json" \
+            --no-progress
+          aws s3 cp keys "s3://${BUCKET}/keys/" --recursive \
+            --cache-control "public, max-age=300" --no-progress
+
+      - name: Report the URLs
+        if: steps.cfg.outputs.ready == 'true'
+        env:
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+        run: |
+          {
+            echo "### Catalog published"
+            echo
+            echo "Revision \`${REV}\`"
+            echo
+            echo '```'
+            echo "https://apps.crew.kiro.dev/official-registry.json"
+            echo "https://apps.crew.kiro.dev/revisions/${REV}/official-registry.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
