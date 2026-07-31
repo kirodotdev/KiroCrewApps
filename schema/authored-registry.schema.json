@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.crew.kiro.dev/appstore/authored-registry-v1.schema.json",
+  "title": "KiroCrew official app registry (AUTHORED input)",
+  "description": "What a CURATOR writes in this repository. Deliberately NOT the wire format: the publish pipeline turns this into official-registry.schema.json by resolving each source ref to an immutable commit, baking the generated fields from each app's own app.json, and stamping generatedAt + revision. Two differences from the published schema, both intentional: (1) `ref` may be a branch or tag here, because pinning is the pipeline's job, not a human's; (2) every generated field is FORBIDDEN here, so 'generated, never authored' is machine-checked rather than a convention someone remembers. A curator answers only WHAT the app is and WHERE its bytes come from.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "apps"],
+
+  "properties": {
+    "schemaVersion": {
+      "description": "Tracks the published major it compiles to.",
+      "type": "integer",
+      "const": 1
+    },
+    "apps": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/authoredEntry" }
+    },
+    "removed": {
+      "description": "Tombstones are authored by hand -- they are a curation decision, not derived from anything. Carried through to the published document unchanged.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/tombstone" }
+    },
+    "reinstated": {
+      "description": "Append-only reinstatement records. The only thing that may clear a persisted tombstone.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/reinstatement" }
+    }
+  },
+
+  "$defs": {
+    "appName": {
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+
+    "authoredEntry": {
+      "description": "name + source, and nothing else. Every field the store DISPLAYS is generated at publish from the app's app.json, so it cannot drift from the app and cannot be inflated by whoever edits this file. Presentation (categories, membership, layout) is not here at all -- it lives in editorial.json.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source"],
+      "properties": {
+        "name": { "$ref": "#/$defs/appName" },
+        "source": { "$ref": "#/$defs/authoredSource" },
+        "note": {
+          "description": "Curator-facing comment. Stripped at publish -- never shipped to a client, never shown in the store.",
+          "type": "string",
+          "maxLength": 300
+        }
+      }
+    },
+
+    "authoredSource": {
+      "type": "object",
+      "oneOf": [{ "$ref": "#/$defs/authoredSourceGit" }]
+    },
+
+    "authoredSourceGit": {
+      "title": "git -- the only transport implemented in v1",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "url", "ref"],
+      "properties": {
+        "type": { "const": "git" },
+        "url": {
+          "description": "https only -- same reasoning as the published schema: `ext::` executes, a leading `-` injects arguments, `file://` reads local paths, and no trust tier supplies clone credentials so ssh could not authenticate regardless.",
+          "type": "string",
+          "pattern": "^https://[^\\u0000\\s]+$",
+          "maxLength": 2048
+        },
+        "ref": {
+          "description": "A commit, branch, or tag. A branch/tag is resolved to the commit it points at during publish, so the published document is always immutably pinned even though this one need not be.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\u0000\\s]+$"
+        },
+        "subdir": {
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\.\\.)(?!.*\\\\)[^\\u0000]+$",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+
+    "tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "reason", "since"],
+      "properties": {
+        "name": { "$ref": "#/$defs/appName" },
+        "reason": { "enum": ["deprecated", "superseded", "withdrawn", "malicious"] },
+        "since": { "type": "string", "format": "date" },
+        "note": { "type": "string", "maxLength": 300 },
+        "replacedBy": { "$ref": "#/$defs/appName" },
+        "advice": { "enum": ["keep", "disable", "uninstall"], "default": "keep" }
+      }
+    },
+
+    "reinstatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "since"],
+      "properties": {
+        "name": { "$ref": "#/$defs/appName" },
+        "since": { "type": "string", "format": "date" },
+        "note": { "type": "string", "maxLength": 300 }
+      }
+    }
+  }
+}

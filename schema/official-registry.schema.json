@@ -1,0 +1,231 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.crew.kiro.dev/appstore/official-registry-v1.schema.json",
+  "title": "KiroCrew official app registry",
+  "description": "Curated app catalog. Answers exactly two questions per app: WHAT it is (identity) and WHERE its bytes come from (source). Everything else is either GENERATED at publish time from the app's own app.json, or belongs in editorial.json (presentation) -- never hand-authored here. This document must not name other registries (catalog sources come from owner config or the build-time edition seam), must not carry presentation (that is editorial.json), and must not carry executable strings (the client never runs a command supplied by a fetched document).",
+
+  "$ref": "#/$defs/registryDocument",
+
+  "$defs": {
+    "registryDocument": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["schemaVersion", "apps"],
+      "properties": {
+        "schemaVersion": {
+          "description": "Integer major. A major this client does not support triggers full fallback, not a partial read.",
+          "type": "integer",
+          "const": 1
+        },
+        "generatedAt": {
+          "description": "Publish stamp. Set by CI, not by curators.",
+          "type": "string",
+          "format": "date-time"
+        },
+        "revision": {
+          "description": "Opaque publish revision id. Published payloads are immutable per revision -- never rewrite one with different bytes.",
+          "type": "string",
+          "minLength": 1
+        },
+        "apps": {
+          "description": "Capped only as a sanity bound; the real defense against an oversized document is a transfer-size limit in the client, since a schema limit is only reached after the whole payload has been parsed. Note `removed`/`reinstated` are deliberately NOT capped: they are append-only history, and a schema limit that truncated them would start resurrecting withdrawn apps.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/entry" },
+          "maxItems": 5000
+        },
+        "removed": {
+          "description": "Tombstones. Positive removal data that outranks a stale cached entry.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/tombstone" }
+        },
+        "reinstated": {
+          "description": "Explicit reinstatement records. The ONLY thing that may clear a persisted tombstone -- omission from `removed` must never resurrect an app. Permanently append-only, never pruned.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/reinstatement" }
+        }
+      }
+    },
+
+    "appName": {
+      "description": "Unique app id. Same gate as the runtime KEBAB_RE in apps/manifest.py -- a traversing or absolute name must never reach a filesystem path.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+
+    "sha256": {
+      "type": "string",
+      "pattern": "^[a-f0-9]{64}$"
+    },
+
+    "entry": {
+      "description": "AUTHORED: name + source. GENERATED at publish from the app's app.json: everything below the divider. A curator never types the generated fields, and an app author never edits this document.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "source"],
+      "properties": {
+        "name": { "$ref": "#/$defs/appName" },
+        "source": { "$ref": "#/$defs/source" },
+
+        "displayName": { "type": "string", "maxLength": 60 },
+        "summary": {
+          "description": "Short, list-safe. Long-form body/screenshots/highlights are never baked -- they stay lazy on the detail view.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "author": { "$ref": "#/$defs/author" },
+        "tags": {
+          "description": "AUTHOR-DECLARED, free-form, and VISIBLE as filter facets. Not a place for search synonyms -- use searchAliases for those.",
+          "type": "array",
+          "items": { "type": "string", "maxLength": 32 },
+          "maxItems": 16
+        },
+        "searchAliases": {
+          "description": "Invisible search synonyms (\"deck\", \"powerpoint\"). Matched by search, never rendered as chips -- which is why these are not tags.",
+          "type": "array",
+          "items": { "type": "string", "maxLength": 32 },
+          "maxItems": 16
+        },
+        "version": { "type": "string", "maxLength": 64 },
+        "iconRef": { "type": "string" },
+        "heroRef": { "type": "string" }
+      }
+    },
+
+    "author": {
+      "description": "Structured from the start: a bare string cannot carry a link or distinguish a person from an org, and widening string -> object later would be a breaking change. The publish step normalizes a legacy bare string into { name }.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "url": { "type": "string", "pattern": "^https://" },
+        "kind": { "enum": ["person", "org"] }
+      }
+    },
+
+    "source": {
+      "description": "Where the app's BYTES come from. Closed discriminated union: exactly one variant, no extra properties, and each variant's pinning field is required. A loosely-modelled source would validate an archive with no digest -- an unpinned download.",
+      "type": "object",
+      "oneOf": [
+        { "$ref": "#/$defs/sourceGit" },
+        { "$ref": "#/$defs/sourceArchive" },
+        { "$ref": "#/$defs/sourceS3" },
+        { "$ref": "#/$defs/sourceOci" },
+        { "$ref": "#/$defs/sourceBundle" }
+      ]
+    },
+
+    "sourceGit": {
+      "title": "git (the only variant implemented in v1)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "url", "ref"],
+      "properties": {
+        "type": { "const": "git" },
+        "url": {
+          "description": "https only, because a git URL is an execution vector once it reaches `git clone`: the `ext::` transport runs a command, a value beginning with `-` is argument injection into the git invocation, and `file://` reads arbitrary local paths. Restricting the scheme here keeps this document consistent with its own rule against carrying executable strings, rather than deferring entirely to a trusted-host gate that lives in the client and does not exist yet. This also costs nothing in practice: no trust tier supplies ambient clone credentials, so an ssh URL could not authenticate anyway. Self-hosted forges are still fine -- any https host works, and WHICH hosts may be cloned remains a separate allowlist gate.",
+          "type": "string",
+          "pattern": "^https://[^\\u0000\\s]+$",
+          "maxLength": 2048
+        },
+        "ref": {
+          "description": "MUST be a full immutable commit id. A branch name is a mutable pointer, so a signed index naming `main` signs nothing about the bytes. The publish pipeline resolves the curator's branch/tag to a commit and emits that.",
+          "type": "string",
+          "pattern": "^[a-f0-9]{40}$|^[a-f0-9]{64}$"
+        },
+        "subdir": {
+          "description": "Contained relative path: no absolute, no '..', no backslash, no NUL, and not empty (omit the field instead of passing \"\"). The '..' rule is a substring test, so it also rejects otherwise-legitimate names containing a double dot such as 'a..b'. That is deliberate -- this value becomes a filesystem path, and a conservative test is worth more than the rare directory name it costs.",
+          "type": "string",
+          "pattern": "^(?!/)(?!.*\\.\\.)(?!.*\\\\)[^\\u0000]+$",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+
+    "sourceArchive": {
+      "title": "archive (reserved)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "url", "sha256"],
+      "properties": {
+        "type": { "const": "archive" },
+        "url": { "type": "string", "format": "uri" },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+
+    "sourceS3": {
+      "title": "s3 (reserved)",
+      "description": "Separate from `archive` because the auth model differs: SigV4 with a region and an explicit credential grant vs an anonymous HTTPS GET. Needing credentials at all makes this variant contingent on the per-repository credential-grant mechanism -- no trust tier ever supplies them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "bucket", "key", "region", "sha256"],
+      "properties": {
+        "type": { "const": "s3" },
+        "bucket": { "type": "string", "minLength": 1 },
+        "key": { "type": "string", "minLength": 1 },
+        "region": { "type": "string", "minLength": 1 },
+        "sha256": { "$ref": "#/$defs/sha256" }
+      }
+    },
+
+    "sourceOci": {
+      "title": "oci (reserved)",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ref", "digest"],
+      "properties": {
+        "type": { "const": "oci" },
+        "ref": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
+      }
+    },
+
+    "sourceBundle": {
+      "title": "bundle (reserved)",
+      "description": "Prebuilt ESM bundle. Maps the federated-app-platform RFC's bundleUrl + bundleHash onto this union.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "url", "integrity"],
+      "properties": {
+        "type": { "const": "bundle" },
+        "url": { "type": "string", "format": "uri" },
+        "integrity": {
+          "type": "string",
+          "pattern": "^sha(256|384|512)-[A-Za-z0-9+/]+={0,2}$"
+        }
+      }
+    },
+
+    "tombstone": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "reason", "since"],
+      "properties": {
+        "name": { "$ref": "#/$defs/appName" },
+        "reason": { "enum": ["deprecated", "superseded", "withdrawn", "malicious"] },
+        "since": { "type": "string", "format": "date" },
+        "note": { "type": "string", "maxLength": 300 },
+        "replacedBy": { "$ref": "#/$defs/appName" },
+        "advice": {
+          "description": "What the client should do about an ALREADY-INSTALLED copy. Default 'keep' -- only a yank escalates to 'uninstall'.",
+          "enum": ["keep", "disable", "uninstall"],
+          "default": "keep"
+        }
+      }
+    },
+
+    "reinstatement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "since"],
+      "properties": {
+        "name": { "$ref": "#/$defs/appName" },
+        "since": { "type": "string", "format": "date" },
+        "note": { "type": "string", "maxLength": 300 }
+      }
+    }
+  }
+}
