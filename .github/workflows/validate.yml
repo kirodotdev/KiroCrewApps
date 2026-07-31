@@ -1,0 +1,39 @@
+name: Validate catalog
+
+# The catalog is data that ships to every client, so the gate runs on every
+# change to it -- a bad merge here is a bad storefront for everyone, and there
+# is no build step in between to catch it.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r tools/requirements.txt pytest
+
+      # The contract tests come FIRST. They prove the validator still rejects
+      # what it is supposed to reject; running the validator alone would pass
+      # just as happily with every check silently broken.
+      - name: Contract tests (prove the gate still bites)
+        run: pytest tests/ -q
+
+      - name: Validate authored catalog
+        run: python tools/validate.py
+
+      # Formatting is not cosmetic for a hand-edited data file: a normalized
+      # form keeps review diffs to the semantic change instead of a reflow.
+      - name: Check catalog formatting is normalized
+        run: python tools/format.py --check

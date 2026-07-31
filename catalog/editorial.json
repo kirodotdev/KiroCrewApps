@@ -1,0 +1,42 @@
+{
+  "schemaVersion": 1,
+  "categories": [
+    {
+      "id": "developer-tools",
+      "label": "Developer Tools",
+      "order": 10,
+      "appRefs": []
+    },
+    {
+      "id": "oncall-ops",
+      "label": "On-call & Ops",
+      "order": 20,
+      "appRefs": []
+    },
+    {
+      "id": "productivity",
+      "label": "Productivity",
+      "order": 30,
+      "appRefs": []
+    },
+    {
+      "id": "agents-automation",
+      "label": "Agents & Automation",
+      "order": 40,
+      "appRefs": []
+    },
+    {
+      "id": "research-writing",
+      "label": "Research & Writing",
+      "order": 50,
+      "appRefs": []
+    },
+    {
+      "id": "other",
+      "label": "Other",
+      "order": 60,
+      "appRefs": []
+    }
+  ],
+  "sections": []
+}

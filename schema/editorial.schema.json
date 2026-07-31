@@ -1,0 +1,145 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.crew.kiro.dev/appstore/editorial-v1.schema.json",
+  "title": "KiroCrew App Store editorial feed",
+  "description": "Everything about how the store PRESENTS apps: the category taxonomy, which apps are in which category, and the Discover layout. Only REFERENCES apps by name -- app data always resolves through the registry, so editorial can never inject a phantom or spoofed app. Read tolerantly: unknown section types are skipped, and a section that fails validation is dropped individually rather than failing the page.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion"],
+
+  "properties": {
+    "schemaVersion": {
+      "description": "Integer major. Additive-only within a major: new fields are optional and existing fields never change meaning. A major the client does not support triggers FULL fallback (cache -> bundled snapshot -> built-in heuristic), not a partial render.",
+      "type": "integer",
+      "const": 1
+    },
+    "minClientVersion": {
+      "description": "Independent of the schema major. Lets the server force older clients onto their bundled default when a doc relies on behavior they lack. A client below this ignores the document entirely.",
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+"
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "revision": { "type": "string", "minLength": 1 },
+
+    "categories": {
+      "description": "Taxonomy AND membership together, so the reference check (`appRefs` -> a declared app) is the same cross-document check the publish step already runs for sections, and the registry carries no presentation at all. `order` drives the rail sequence -- there is no separate ordering section. An app in no category falls into a default bucket and is never hidden; membership is single-valued by construction (an app appearing in two categories is a curation error the publish step rejects), because a partitioned rail is the whole point -- use a `rail` section for cross-cutting collections instead.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/category" },
+      "maxItems": 30
+    },
+
+    "sections": {
+      "description": "Ordered Discover layout. Data-driven, not a fixed template -- new layouts are new `type` values, which is what lets the store's appearance change without a client release.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/section" },
+      "maxItems": 40
+    }
+  },
+
+  "$defs": {
+    "appRef": {
+      "description": "Must resolve to a live, non-tombstoned entry in the merged registry. The publish pipeline enforces this; the client drops the reference if it does not resolve.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "order"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 40
+        },
+        "label": {
+          "description": "Display string. Relabeling is a catalog edit, not a client release -- which is why nothing references a category by label.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "order": {
+          "description": "Required, because an absent order has no defined placement: uniqueness can only be checked among the values that are present, so a category without one would land wherever array position happened to put it.",
+          "type": "integer"
+        },
+        "appRefs": {
+          "description": "Membership, curator-assigned. Deliberately NOT derived from the app's manifest -- otherwise an author could self-promote into a curated category by editing their own app.json. Tags cannot promote either: they filter, they never define the rail.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/appRef" },
+          "maxItems": 200
+        }
+      }
+    },
+
+    "section": {
+      "description": "Closed per known variant, but the CLIENT must skip an unrecognized `type` rather than reject the document. Validating strictly here is for the publish gate; the reader is deliberately more tolerant.",
+      "type": "object",
+      "oneOf": [
+        { "$ref": "#/$defs/sectionSpotlight" },
+        { "$ref": "#/$defs/sectionRail" },
+        { "$ref": "#/$defs/sectionBanner" }
+      ]
+    },
+
+    "sectionSpotlight": {
+      "title": "spotlight -- single hero app",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "appRef"],
+      "properties": {
+        "type": { "const": "spotlight" },
+        "appRef": { "$ref": "#/$defs/appRef" },
+        "blurb": { "type": "string", "maxLength": 200 }
+      }
+    },
+
+    "sectionRail": {
+      "title": "rail -- titled group, for CROSS-CUTTING collections",
+      "description": "Independent of the taxonomy: this is how an app appears in more than one place without multi-category membership (\"Staff picks\", \"New this month\").",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "appRefs"],
+      "properties": {
+        "type": { "const": "rail" },
+        "title": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "appRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/appRef" },
+          "minItems": 1,
+          "maxItems": 20
+        }
+      }
+    },
+
+    "sectionBanner": {
+      "title": "banner -- editorial copy, optional CTA",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "md"],
+      "properties": {
+        "type": { "const": "banner" },
+        "md": {
+          "description": "Restricted markdown. Rendered through the dashboard's sanitizer -- never raw HTML.",
+          "type": "string",
+          "maxLength": 500
+        },
+        "cta": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["label", "href"],
+          "properties": {
+            "label": { "type": "string", "minLength": 1, "maxLength": 40 },
+            "href": {
+              "description": "https only. A curated feed must not be able to point the client at other schemes.",
+              "type": "string",
+              "pattern": "^https://"
+            }
+          }
+        }
+      }
+    }
+  }
+}

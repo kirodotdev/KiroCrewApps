@@ -1,0 +1,62 @@
+{
+  "schemaVersion": 1,
+  "minClientVersion": "0.1.2",
+  "generatedAt": "2026-07-30T19:20:00Z",
+  "revision": "2026-07-30T19:20:00Z-a91f3c2",
+  "categories": [
+    {
+      "id": "ops",
+      "label": "Ops",
+      "order": 10,
+      "appRefs": [
+        "oncall-radar"
+      ]
+    },
+    {
+      "id": "productivity",
+      "label": "Productivity",
+      "order": 20,
+      "appRefs": [
+        "standup-zen"
+      ]
+    },
+    {
+      "id": "writing",
+      "label": "Writing",
+      "order": 30,
+      "appRefs": [
+        "pptx-maker",
+        "mindcraft"
+      ]
+    },
+    {
+      "id": "fun",
+      "label": "Fun",
+      "order": 40,
+      "appRefs": []
+    }
+  ],
+  "sections": [
+    {
+      "type": "spotlight",
+      "appRef": "oncall-radar",
+      "blurb": "Every page, shift and handoff on one screen."
+    },
+    {
+      "type": "rail",
+      "title": "Staff picks",
+      "appRefs": [
+        "pptx-maker",
+        "oncall-radar"
+      ]
+    },
+    {
+      "type": "banner",
+      "md": "New this week: **Channels** \u2014 reach your crew from Slack, Discord or Telegram.",
+      "cta": {
+        "label": "Learn more",
+        "href": "https://crew.kiro.dev/docs/channels"
+      }
+    }
+  ]
+}

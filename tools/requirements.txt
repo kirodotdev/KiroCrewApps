@@ -1,0 +1,4 @@
+# The [format] extra is REQUIRED, not a nicety: without rfc3339-validator and
+# rfc3986-validator, jsonschema silently skips the `date-time` and `uri` format
+# checks our schemas rely on, and CI would enforce less than it appears to.
+jsonschema[format]==4.26.0
