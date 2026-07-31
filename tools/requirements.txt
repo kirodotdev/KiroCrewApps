@@ -2,3 +2,8 @@
 # rfc3986-validator, jsonschema silently skips the `date-time` and `uri` format
 # checks our schemas rely on, and CI would enforce less than it appears to.
 jsonschema[format]==4.26.0
+
+# Detached ed25519 signatures for the published documents. A signature is the
+# acceptance gate for Official trust, so this is a hard dependency of publishing
+# rather than an optional extra.
+cryptography==50.0.0
