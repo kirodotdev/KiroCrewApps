@@ -21,6 +21,7 @@ in the KiroCrew repository. This README covers the mechanics.
 | `schema/editorial.schema.json` | Contract for the editorial feed |
 | `tools/validate.py` | The gate: schema + cross-document invariants, offline |
 | `tools/publish.py` | Resolve → bake → stamp → sign the published documents |
+| `tools/verify_dist.py` | Verifies published artifacts against `keys/*.pub` |
 | `tools/format.py` | Normalizes authored files so diffs stay semantic |
 | `tests/` | Proves the gate still rejects what it should |
 
@@ -192,11 +193,20 @@ Resolve-then-fetch is two round trips, so after fetching the pipeline verifies
 that moved in between, or an annotated tag's object id, would otherwise publish
 bytes that disagree with the pin.
 
-## Not yet implemented
+## Where it gets served
 
-Distribution. The pipeline emits signed artifacts and stops; `publish.yml`
-retains them as a workflow artifact because there is no CDN target wired. Nothing
-in this repository reaches a client today.
+```
+https://apps.crew.kiro.dev/official-registry.json
+https://apps.crew.kiro.dev/editorial.json
+```
+
+`docs/distribution.md` has the bucket, the OIDC role, the object layout, and the
+CloudFront/DNS steps. **Not reachable yet** — `.github/workflows/s3-publish.yml`
+skips with a notice until the bucket and role exist, so nothing in this
+repository reaches a client today.
+
+GitHub Pages was tried first and is not available: Pages creation is disabled
+org-wide for `kirodotdev`.
 
 Signing-key custody is unassigned, so no `REGISTRY_SIGNING_KEY` secret exists yet
 and a real publish cannot run.
