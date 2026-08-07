@@ -13,6 +13,9 @@
         "url": "https://github.com/launchdarkly-labs",
         "kind": "org"
       },
+      "categories": [
+        "developer-tools"
+      ],
       "note": "LaunchDarkly Labs; public repo, best-effort support per their CONTRIBUTING. Read-only app: changes no flag state."
     }
   ],

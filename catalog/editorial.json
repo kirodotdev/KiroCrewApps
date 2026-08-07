@@ -4,40 +4,32 @@
     {
       "id": "developer-tools",
       "label": "Developer Tools",
-      "order": 10,
-      "appRefs": [
-        "launchdarkly"
-      ]
+      "order": 10
     },
     {
       "id": "oncall-ops",
       "label": "On-call & Ops",
-      "order": 20,
-      "appRefs": []
+      "order": 20
     },
     {
       "id": "productivity",
       "label": "Productivity",
-      "order": 30,
-      "appRefs": []
+      "order": 30
     },
     {
       "id": "agents-automation",
       "label": "Agents & Automation",
-      "order": 40,
-      "appRefs": []
+      "order": 40
     },
     {
       "id": "research-writing",
       "label": "Research & Writing",
-      "order": 50,
-      "appRefs": []
+      "order": 50
     },
     {
       "id": "other",
       "label": "Other",
-      "order": 60,
-      "appRefs": []
+      "order": 60
     }
   ],
   "sections": []

@@ -7,33 +7,22 @@
     {
       "id": "ops",
       "label": "Ops",
-      "order": 10,
-      "appRefs": [
-        "oncall-radar"
-      ]
+      "order": 10
     },
     {
       "id": "productivity",
       "label": "Productivity",
-      "order": 20,
-      "appRefs": [
-        "standup-zen"
-      ]
+      "order": 20
     },
     {
       "id": "writing",
       "label": "Writing",
-      "order": 30,
-      "appRefs": [
-        "pptx-maker",
-        "mindcraft"
-      ]
+      "order": 30
     },
     {
       "id": "fun",
       "label": "Fun",
-      "order": 40,
-      "appRefs": []
+      "order": 40
     }
   ],
   "sections": [
@@ -52,7 +41,7 @@
     },
     {
       "type": "banner",
-      "md": "New this week: **Channels** \u2014 reach your crew from Slack, Discord or Telegram.",
+      "md": "New this week: **Channels** — reach your crew from Slack, Discord or Telegram.",
       "cta": {
         "label": "Learn more",
         "href": "https://crew.kiro.dev/docs/channels"

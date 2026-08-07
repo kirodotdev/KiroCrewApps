@@ -33,8 +33,11 @@ def write_pair(tmp_path: Path, registry: dict, editorial: dict) -> tuple[Path, P
     return reg, ed
 
 
-def app(name: str = "demo-app", ref: str = "main") -> dict:
-    return {"name": name, "source": {"type": "git", "url": "https://example.com/a.git", "ref": ref}}
+def app(name: str = "demo-app", ref: str = "main", categories=None) -> dict:
+    entry = {"name": name, "source": {"type": "git", "url": "https://example.com/a.git", "ref": ref}}
+    if categories is not None:
+        entry["categories"] = categories
+    return entry
 
 
 def base_registry(*apps: dict, **extra) -> dict:
@@ -68,16 +71,17 @@ def test_accepts_branch_ref_in_authored_input(tmp_path):
 def test_accepts_app_with_category_membership(tmp_path):
     registry = base_registry(app("demo-app"))
     editorial = base_editorial(
-        categories=[{"id": "developer-tools", "label": "Developer Tools", "order": 10, "appRefs": ["demo-app"]}]
+        categories=[{"id": "developer-tools", "label": "Developer Tools", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
 
 def test_accepts_same_app_in_category_and_rail(tmp_path):
-    """A rail is how an app appears twice WITHOUT multi-category membership."""
-    registry = base_registry(app("demo-app"))
+    """A rail is how an app appears twice WITHOUT a second category."""
+    registry = base_registry(app("demo-app", categories=["productivity"]))
     editorial = base_editorial(
-        categories=[{"id": "productivity", "label": "Productivity", "order": 10, "appRefs": ["demo-app"]}],
+        categories=[{"id": "productivity", "label": "Productivity", "order": 10}],
         sections=[{"type": "rail", "title": "Staff picks", "appRefs": ["demo-app"]}],
     )
     assert errors_for(tmp_path, registry, editorial) == []
@@ -170,20 +174,56 @@ def test_rejects_duplicate_app_name(tmp_path):
 
 def test_rejects_dangling_app_ref(tmp_path):
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["ghost-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["ghost-app"]}]
     )
     assert any("not declared" in e for e in errors_for(tmp_path, base_registry(), editorial))
 
 
-def test_rejects_app_in_two_categories(tmp_path):
-    registry = base_registry(app("demo-app"))
+def test_accepts_a_secondary_category_but_says_it_does_not_place_the_app(tmp_path):
+    """Primary decides the rail, so the rails stay a partition; a second entry
+    only widens search. Silently accepting it would leave a curator thinking the
+    app appears in two rails."""
+    registry = base_registry(app("demo-app", categories=["dev", "ops"]))
     editorial = base_editorial(
         categories=[
-            {"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app"]},
-            {"id": "ops", "label": "Ops", "order": 20, "appRefs": ["demo-app"]},
+            {"id": "dev", "label": "Dev", "order": 10},
+            {"id": "ops", "label": "Ops", "order": 20},
         ]
     )
-    assert any("single-valued" in e for e in errors_for(tmp_path, registry, editorial))
+    reg, ed = write_pair(tmp_path, registry, editorial)
+    findings = validate(reg, ed)
+    assert findings.errors == []
+    assert any("primary category is 'dev'" in w for w in findings.warnings), findings.warnings
+
+
+def test_rejects_a_third_category(tmp_path):
+    """Capped at two, or 'which rail does this land in' stops having an answer."""
+    registry = base_registry(app("demo-app", categories=["dev", "ops", "other"]))
+    editorial = base_editorial(
+        categories=[
+            {"id": "dev", "label": "Dev", "order": 10},
+            {"id": "ops", "label": "Ops", "order": 20},
+            {"id": "other", "label": "Other", "order": 30},
+        ]
+    )
+    assert errors_for(tmp_path, registry, editorial) != []
+
+
+def test_rejects_the_same_category_listed_twice(tmp_path):
+    """"in categories 'a' and 'a'" reads as nonsense; uniqueItems refuses it."""
+    registry = base_registry(app("demo-app", categories=["dev", "dev"]))
+    editorial = base_editorial(categories=[{"id": "dev", "label": "Dev", "order": 10}])
+    assert errors_for(tmp_path, registry, editorial) != []
+
+
+def test_rejects_a_category_not_declared_in_editorial(tmp_path):
+    """The taxonomy has one home. A schema cannot check another document, so an
+    id that exists nowhere has to be caught here or it reaches a client."""
+    registry = base_registry(app("demo-app", categories=["invented"]))
+    editorial = base_editorial(categories=[{"id": "dev", "label": "Dev", "order": 10}])
+    errors = errors_for(tmp_path, registry, editorial)
+    assert any("not declared in editorial.json" in e for e in errors), errors
 
 
 def test_rejects_duplicate_category_order(tmp_path):
@@ -217,7 +257,8 @@ def test_rejects_reference_to_tombstoned_app(tmp_path):
         removed=[{"name": "demo-app", "reason": "withdrawn", "since": "2026-01-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -240,7 +281,8 @@ def test_reinstated_app_may_be_referenced_again(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-06-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
@@ -253,7 +295,8 @@ def test_removal_newer_than_reinstatement_still_tombstoned(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-06-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -270,7 +313,8 @@ def test_same_day_reinstatement_fails_closed(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-07-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -365,7 +409,8 @@ def test_bogus_reinstatement_date_is_rejected(tmp_path):
         reinstated=[{"name": "demo-app", "since": "9999-99-99"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
     )
     assert errors_for(tmp_path, registry, editorial) != []
 
@@ -386,7 +431,8 @@ def test_cross_document_layer_fails_closed_on_a_bogus_date():
         reinstated=[{"name": "demo-app", "since": "9999-99-99"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
     )
     findings = Findings()
     check_cross_document(registry, editorial, findings)
@@ -480,14 +526,14 @@ def test_requires_category_order(tmp_path):
     assert errors_for(tmp_path, base_registry(), editorial) != []
 
 
-def test_duplicate_ref_in_one_category_reports_that_not_two_categories(tmp_path):
-    """"in categories 'a' and 'a'" reads as nonsense; it is a distinct mistake."""
-    registry = base_registry(app("demo-app"))
+def test_duplicate_ref_in_one_rail_is_still_a_single_app(tmp_path):
+    """A rail listing the same app twice is a curator slip, not two apps."""
+    registry = base_registry(app("demo-app", categories=["dev"]))
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10, "appRefs": ["demo-app", "demo-app"]}]
+        categories=[{"id": "dev", "label": "Dev", "order": 10}],
+        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app", "demo-app"]}]
     )
-    errors = errors_for(tmp_path, registry, editorial)
-    assert any("listed twice in category 'dev'" in e for e in errors), errors
+    assert errors_for(tmp_path, registry, editorial) != []
 
 
 def _strip_annotations(node):

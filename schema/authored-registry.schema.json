@@ -49,12 +49,27 @@
           "description": "Curator-stated attribution, overriding whatever the app's manifest claims. The one display field that is authorable here, because it is the only one that is an ASSERTION rather than a description: a manifest lives in the publisher's repository, so its `author` is a self-claim by the party being described -- and this document is signed by us, so what it says about provenance has to be what WE state. Omit it to fall back to the manifest.",
           "$ref": "#/$defs/author"
         },
+        "categories": {
+          "description": "Membership, stated on the app rather than collected into a list somewhere else -- so an app and its placement are one edit, and a reference to an app that does not exist is unrepresentable. Curator-assigned and deliberately NOT read from the app's manifest, or an author could self-promote into a curated category by editing their own app.json. Tags cannot promote either: they filter, they never define the rail. ORDER IS MEANINGFUL: the first entry is the primary category and decides which rail the app is partitioned into, so the rails stay a partition; a second only widens search and filtering. Capped at two so nothing appears everywhere. Permitted ids are the categories declared in editorial.json, checked cross-document at validation -- adding a category stays one edit in one file.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/categoryId" },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
         "note": {
           "description": "Curator-facing comment. Stripped at publish -- never shipped to a client, never shown in the store.",
           "type": "string",
           "maxLength": 300
         }
       }
+    },
+
+    "categoryId": {
+      "description": "A category id. The pattern is checked here; that the id actually EXISTS is checked cross-document against editorial.json, because a schema cannot reference another document's contents -- and duplicating the list into an enum here would create a second source of truth that silently drifts.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 40
     },
 
     "author": {

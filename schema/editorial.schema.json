@@ -64,12 +64,6 @@
         "order": {
           "description": "Required, because an absent order has no defined placement: uniqueness can only be checked among the values that are present, so a category without one would land wherever array position happened to put it.",
           "type": "integer"
-        },
-        "appRefs": {
-          "description": "Membership, curator-assigned. Deliberately NOT derived from the app's manifest -- otherwise an author could self-promote into a curated category by editing their own app.json. Tags cannot promote either: they filter, they never define the rail.",
-          "type": "array",
-          "items": { "$ref": "#/$defs/appRef" },
-          "maxItems": 200
         }
       }
     },

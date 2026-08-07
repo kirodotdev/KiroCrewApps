@@ -683,8 +683,7 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
         json.dumps(
             {
                 "schemaVersion": 1,
-                "categories": [{"id": "dev", "label": "Dev", "order": 10,
-                                "appRefs": ["demo-app"]}],
+                "categories": [{"id": "dev", "label": "Dev", "order": 10}],
             },
             indent=2,
         )

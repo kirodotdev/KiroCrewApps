@@ -74,6 +74,14 @@
           "maxLength": 200
         },
         "author": { "$ref": "#/$defs/author" },
+        "categories": {
+          "description": "Curator-assigned membership, carried through from the authored catalog. ORDER IS MEANINGFUL: the first entry is the primary category and is the one that places the app in a rail; a second only widens search and filtering. A client that does not recognise an id must SKIP it rather than reject the document, so an added category does not break older clients.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/categoryId" },
+          "minItems": 1,
+          "maxItems": 2,
+          "uniqueItems": true
+        },
         "tags": {
           "description": "AUTHOR-DECLARED, free-form, and VISIBLE as filter facets. Not a place for search synonyms -- use searchAliases for those.",
           "type": "array",
@@ -90,6 +98,13 @@
         "iconRef": { "type": "string" },
         "heroRef": { "type": "string" }
       }
+    },
+
+    "categoryId": {
+      "description": "A category id, as declared in editorial.json. Deliberately not an enum here: the taxonomy lives in one document, and copying it into this schema would be a second source of truth that drifts. Existence is checked cross-document at publish.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 40
     },
 
     "author": {
