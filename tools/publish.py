@@ -55,6 +55,14 @@ from verify_dist import load_public_keys  # noqa: E402
 
 SUMMARY_MAX = 200
 TAGS_MAX = 16
+
+# Author names that assert the catalog operator itself. Only an app whose source
+# is under FIRST_PARTY_URL_PREFIX may carry one -- see bake_entry. casefold()ed,
+# because `KiroCrew` and `kirocrew` make the same claim to a reader.
+RESERVED_AUTHORS = frozenset(
+    {"kirocrew", "kiro crew", "kiro", "kirodotdev", "kiro.dev", "crew.kiro.dev"}
+)
+FIRST_PARTY_URL_PREFIX = "https://github.com/kirodotdev/"
 COMMIT_RE = re.compile(r"^[a-f0-9]{40}$|^[a-f0-9]{64}$")
 HTTPS_RE = re.compile(r"^https://[^\s\x00]+$")
 
@@ -276,8 +284,33 @@ def bake_entry(
         entry["displayName"] = display[:60]
     if summary := derive_summary(manifest.get("description", ""), findings, name):
         entry["summary"] = summary
-    if author := normalize_author(manifest.get("author")):
-        entry["author"] = author
+    # Attribution is the one display field the curator may state, because it is
+    # the one that is an ASSERTION rather than a description. This document is
+    # signed by us, so what it says about who made an app has to be what we
+    # state -- not what the app's own file claims about itself.
+    if curated := normalize_author(authored.get("author")):
+        entry["author"] = curated
+    elif author := normalize_author(manifest.get("author")):
+        # Falling back to the publisher's self-claim. Harmless for an ordinary
+        # name, but a manifest asserting OUR name is a trust claim it cannot be
+        # allowed to make on its own, so honour it only on first-party
+        # provenance -- the source url the curator wrote, which is also where the
+        # code actually comes from and which a manifest cannot forge.
+        claimed = author["name"].strip().casefold()
+        url = (authored.get("source") or {}).get("url") or ""
+        if claimed in RESERVED_AUTHORS and not url.startswith(FIRST_PARTY_URL_PREFIX):
+            # DROP the claim, do not fail the publish. Refusing the whole run
+            # would let any publisher halt every release -- including other
+            # apps' -- by writing our name in a file we do not control. State the
+            # author in the catalog entry to publish attribution anyway.
+            findings.warn(
+                f"{name}: manifest claims the reserved author {author['name']!r} "
+                f"but its source {url!r} is not under {FIRST_PARTY_URL_PREFIX}; "
+                f"publishing it with no author. Set `author` on the catalog entry "
+                f"to state the attribution yourself."
+            )
+        else:
+            entry["author"] = author
 
     tags = [t.strip() for t in manifest.get("tags") or [] if isinstance(t, str) and t.strip()]
     if tags:

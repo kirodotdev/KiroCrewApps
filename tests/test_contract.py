@@ -101,7 +101,6 @@ def test_uncategorized_app_warns_but_does_not_fail(tmp_path):
     [
         ("displayName", "Demo"),   # generated from app.json at publish
         ("summary", "A demo"),     # generated
-        ("author", {"name": "x"}), # generated
         ("tags", ["dev"]),         # generated
         ("searchAliases", ["d"]),  # generated
         ("version", "1.0.0"),      # generated
@@ -115,6 +114,36 @@ def test_uncategorized_app_warns_but_does_not_fail(tmp_path):
 def test_rejects_field_that_is_not_curator_authored(tmp_path, field, value):
     entry = app()
     entry[field] = value
+    assert errors_for(tmp_path, base_registry(entry), base_editorial()) != []
+
+
+def test_accepts_curator_stated_author(tmp_path):
+    """`author` is the deliberate exception to "everything displayed is generated".
+
+    It is an assertion about provenance rather than a description of the app, and
+    this document is signed by us -- so a manifest's self-claim cannot be the
+    last word on it. Withholding it from the curator protected nothing anyway:
+    whoever edits this file holds the signing key.
+    """
+    entry = app()
+    entry["author"] = {"name": "LaunchDarkly Labs", "kind": "org"}
+    assert errors_for(tmp_path, base_registry(entry), base_editorial()) == []
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        "LaunchDarkly Labs",              # bare string: the published shape is an object
+        {},                               # name is required
+        {"name": ""},                     # empty name
+        {"name": "x", "url": "http://a"}, # https only
+        {"name": "x", "kind": "robot"},   # person | org
+        {"name": "x", "email": "a@b.c"},  # additionalProperties: false
+    ],
+)
+def test_rejects_a_malformed_curator_author(tmp_path, value):
+    entry = app()
+    entry["author"] = value
     assert errors_for(tmp_path, base_registry(entry), base_editorial()) != []
 
 

@@ -45,6 +45,11 @@ def allow_local_urls(monkeypatch):
     monkeypatch.setattr(
         publish, "GIT_ENV", {**publish.GIT_ENV, "GIT_ALLOW_PROTOCOL": "https:file"}
     )
+    # The fixture apps stand in for first-party ones (`demo-app`, authored by
+    # kirocrew), but a temp repo cannot live under the real org url, so the
+    # provenance prefix is relaxed alongside the transport. Relaxed here for the
+    # same reason as the two above: a production opt-out would get set in CI.
+    monkeypatch.setattr(publish, "FIRST_PARTY_URL_PREFIX", "/")
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -183,7 +188,15 @@ def authored(name="demo-app", url="https://example.com/a.git", ref="main"):
 
 def test_bakes_generated_fields():
     findings = Findings()
-    entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings)
+    # A first-party source, because the manifest claims the first-party author:
+    # `bake_entry` refuses that pairing on any other provenance, and this test is
+    # about deriving display fields, not about who may claim to be us.
+    entry = publish.bake_entry(
+        authored(url="https://github.com/kirodotdev/KiroCrewApp-Demo.git"),
+        MANIFEST,
+        "a" * 40,
+        findings,
+    )
 
     assert entry["source"]["ref"] == "a" * 40, "the pin must be the resolved commit"
     assert entry["displayName"] == "Demo App"
@@ -514,6 +527,110 @@ def test_revision_is_derived_from_content(tmp_path, allow_local_urls):
 
     digest = publish.content_digest({"apps": [], "removed": [], "reinstated": []})
     assert digest == publish.content_digest({"apps": [], "removed": [], "reinstated": []})
+
+
+def _bake(url: str, author, name: str = "some-app", curated=None):
+    """Bake one entry, as build_registry would. Returns (entry, findings)."""
+    findings = publish.Findings()
+    authored = {"name": name, "source": {"type": "git", "url": url, "ref": "main"}}
+    if curated is not None:
+        authored["author"] = curated
+    entry = publish.bake_entry(
+        authored, {"name": name, "author": author}, "0" * 40, findings
+    )
+    return entry, findings
+
+
+def test_curator_stated_author_overrides_the_manifest():
+    """The catalog is signed by us, so what it asserts about provenance must be
+    what we state -- not what the app's own file claims about itself."""
+    entry, findings = _bake(
+        "https://github.com/launchdarkly-labs/launchdarkly-kiro-crew-app",
+        "kirocrew",
+        name="launchdarkly",
+        curated={
+            "name": "LaunchDarkly Labs",
+            "url": "https://github.com/launchdarkly-labs",
+            "kind": "org",
+        },
+    )
+
+    assert entry["author"] == {
+        "name": "LaunchDarkly Labs",
+        "url": "https://github.com/launchdarkly-labs",
+        "kind": "org",
+    }
+    assert findings.warnings == [], "a stated author is not a fallback, so no warning"
+
+
+def test_a_curator_may_state_the_first_party_author():
+    """The reserved-name guard constrains the MANIFEST's self-claim, not us: the
+    curator holds the signing key, so it can already assert anything -- there is
+    no privilege to withhold here, only drift to avoid."""
+    entry, _ = _bake(
+        "https://github.com/acme-labs/white-labelled.git",
+        "acme-labs",
+        curated={"name": "kirocrew", "kind": "org"},
+    )
+    assert entry["author"] == {"name": "kirocrew", "kind": "org"}
+
+
+def test_third_party_claiming_the_first_party_author_ships_unattributed():
+    """`author` lives in the PUBLISHER's repo, so it is a self-claim. The claim is
+    dropped rather than republished -- but the app still publishes, because
+    failing the run would let any publisher halt every release by writing our
+    name in a file we do not control."""
+    entry, findings = _bake("https://github.com/acme-labs/their-app.git", "kirocrew")
+
+    assert "author" not in entry, "the false claim must not reach a signed document"
+    assert findings.errors == [], "one bad manifest field must not fail the publish"
+    assert any("reserved author" in w for w in findings.warnings)
+
+
+def test_the_reserved_author_check_is_case_insensitive():
+    """`KiroCrew` and `kirocrew` make the same claim to a reader."""
+    entry, findings = _bake("https://github.com/acme-labs/their-app.git", "KiroCrew")
+    assert "author" not in entry
+    assert findings.warnings
+
+
+def test_first_party_source_may_carry_the_first_party_author():
+    """Provenance, not the manifest, is what grants it -- and a curator-authored
+    source url under our org cannot be forged by a publisher's manifest."""
+    entry, findings = _bake(
+        "https://github.com/kirodotdev/KiroCrewApp-Thing.git", "kirocrew"
+    )
+    assert entry["author"] == {"name": "kirocrew"}
+    assert findings.warnings == []
+
+
+def test_a_third_party_author_passes_through_untouched():
+    entry, findings = _bake("https://github.com/acme-labs/their-app.git", "acme-labs")
+    assert entry["author"] == {"name": "acme-labs"}
+    assert findings.warnings == []
+
+
+def test_the_real_launchdarkly_app_is_publishable_but_unattributed():
+    """The actual case: the published LaunchDarkly app declares
+    `"author": "kirocrew"` while living in launchdarkly-labs. It is listable
+    today -- it simply carries no author until its own app.json is corrected."""
+    entry, findings = _bake(
+        "https://github.com/launchdarkly-labs/launchdarkly-kiro-crew-app",
+        "kirocrew",
+        name="launchdarkly",
+    )
+    assert "author" not in entry
+    assert findings.errors == []
+    assert entry["source"]["ref"] == "0" * 40, "still pinned to the resolved commit"
+
+
+def test_structured_author_objects_are_checked_too():
+    """The dict form must not be a way around the check."""
+    entry, _ = _bake(
+        "https://github.com/acme-labs/their-app.git",
+        {"name": "KiroCrew", "url": "https://crew.kiro.dev", "kind": "org"},
+    )
+    assert "author" not in entry
 
 
 def test_canonical_bytes_are_what_gets_signed():
