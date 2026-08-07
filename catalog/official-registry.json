@@ -1,6 +1,16 @@
 {
   "schemaVersion": 1,
-  "apps": [],
+  "apps": [
+    {
+      "name": "launchdarkly",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/launchdarkly-labs/launchdarkly-kiro-crew-app",
+        "ref": "main"
+      },
+      "note": "LaunchDarkly Labs; public repo, best-effort support per their CONTRIBUTING. Read-only app: changes no flag state."
+    }
+  ],
   "removed": [],
   "reinstated": []
 }

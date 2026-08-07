@@ -5,7 +5,9 @@
       "id": "developer-tools",
       "label": "Developer Tools",
       "order": 10,
-      "appRefs": []
+      "appRefs": [
+        "launchdarkly"
+      ]
     },
     {
       "id": "oncall-ops",
