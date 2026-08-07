@@ -8,6 +8,11 @@
         "url": "https://github.com/launchdarkly-labs/launchdarkly-kiro-crew-app",
         "ref": "main"
       },
+      "author": {
+        "name": "LaunchDarkly Labs",
+        "url": "https://github.com/launchdarkly-labs",
+        "kind": "org"
+      },
       "note": "LaunchDarkly Labs; public repo, best-effort support per their CONTRIBUTING. Read-only app: changes no flag state."
     }
   ],
