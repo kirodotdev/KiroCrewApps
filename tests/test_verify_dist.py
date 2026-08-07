@@ -22,21 +22,31 @@ import publish  # noqa: E402
 import verify_dist  # noqa: E402
 
 
+def sidecar_for(payload: bytes, algorithm: str, key_id: str, signature: bytes) -> str:
+    return (
+        json.dumps(
+            {
+                "algorithm": algorithm,
+                "keyId": key_id,
+                "payloadSha256": hashlib.sha256(payload).hexdigest(),
+                "signature": base64.b64encode(signature).decode("ascii"),
+            }
+        )
+        + "\n"
+    )
+
+
 @pytest.fixture
 def signed(tmp_path):
-    """A dist/ directory with one correctly signed document, plus its key set."""
+    """A dist/ with one ed25519-signed document, plus its key set.
+
+    The bootstrap algorithm, kept under test because revisions published before
+    the move to KMS are immutable and must stay verifiable.
+    """
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
     key = Ed25519PrivateKey.generate()
-    key_path = tmp_path / "k.pem"
-    key_path.write_bytes(
-        key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
-        )
-    )
     raw = key.public_key().public_bytes(
         encoding=serialization.Encoding.Raw, format=serialization.PublicFormat.Raw
     )
@@ -47,9 +57,90 @@ def signed(tmp_path):
     payload = publish.canonical_bytes({"schemaVersion": 1, "apps": []})
     (dist / "official-registry.json").write_bytes(payload)
     (dist / "official-registry.json.sig").write_text(
-        json.dumps(publish.sign_detached(payload, str(key_path))) + "\n"
+        sidecar_for(payload, "ed25519", key_id, key.sign(payload))
     )
-    return dist, {key_id: raw}, key_path
+    return dist, {key_id: raw}, key
+
+
+@pytest.fixture
+def signed_rsa(tmp_path):
+    """The same, signed the way the KMS key signs: RSASSA_PKCS1_V1_5_SHA_256 over
+    an RSA-3072 key, with the public half stored as SPKI DER."""
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    der = key.public_key().public_bytes(
+        encoding=serialization.Encoding.DER,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    )
+    key_id = hashlib.sha256(der).hexdigest()[:16]
+
+    dist = tmp_path / "dist"
+    dist.mkdir()
+    payload = publish.canonical_bytes({"schemaVersion": 1, "apps": []})
+    (dist / "official-registry.json").write_bytes(payload)
+    (dist / "official-registry.json.sig").write_text(
+        sidecar_for(
+            payload,
+            "RSASSA_PKCS1_V1_5_SHA_256",
+            key_id,
+            key.sign(payload, padding.PKCS1v15(), hashes.SHA256()),
+        )
+    )
+    return dist, {key_id: der}, key
+
+
+def test_accepts_a_kms_signed_document(signed_rsa):
+    dist, keys, _ = signed_rsa
+    assert verify_dist.verify_dir(dist, keys) == []
+
+
+def test_rejects_a_tampered_kms_signed_document(signed_rsa):
+    dist, keys, _ = signed_rsa
+    doc = dist / "official-registry.json"
+    doc.write_bytes(doc.read_bytes().replace(b'"apps": []', b'"apps": [1]'))
+    assert verify_dist.verify_dir(dist, keys) != []
+
+
+def test_rejects_an_rsa_signature_from_the_wrong_key(signed_rsa):
+    """A valid signature by an unrelated key of the right shape must not pass."""
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    dist, keys, _ = signed_rsa
+    key_id = next(iter(keys))
+    impostor = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+    payload = (dist / "official-registry.json").read_bytes()
+    (dist / "official-registry.json.sig").write_text(
+        sidecar_for(
+            payload,
+            "RSASSA_PKCS1_V1_5_SHA_256",
+            key_id,
+            impostor.sign(payload, padding.PKCS1v15(), hashes.SHA256()),
+        )
+    )
+    assert any("does not verify" in p for p in verify_dist.verify_dir(dist, keys))
+
+
+def test_rejects_a_sidecar_with_no_signature_field(signed_rsa):
+    """Must be reported as a problem, not raised as a KeyError: this runs as a
+    pre-upload gate, where a traceback is a worse answer than a named failure."""
+    dist, keys, _ = signed_rsa
+    path = dist / "official-registry.json.sig"
+    sidecar = json.loads(path.read_text())
+    del sidecar["signature"]
+    path.write_text(json.dumps(sidecar))
+    assert any("no signature" in p for p in verify_dist.verify_dir(dist, keys))
+
+
+def test_rejects_a_signature_that_is_not_base64(signed_rsa):
+    dist, keys, _ = signed_rsa
+    path = dist / "official-registry.json.sig"
+    sidecar = json.loads(path.read_text())
+    sidecar["signature"] = "not base64 !!!"
+    path.write_text(json.dumps(sidecar))
+    assert any("not valid base64" in p for p in verify_dist.verify_dir(dist, keys))
 
 
 def test_accepts_a_correctly_signed_document(signed):

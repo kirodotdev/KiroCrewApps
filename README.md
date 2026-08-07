@@ -153,19 +153,26 @@ fetch. Each step exists to remove a human's ability to get it wrong:
 # offline: exercises stamping and schema conformance, resolves nothing
 python tools/publish.py --out dist --dry-run
 
-# real: needs an ed25519 private key PEM
-KIROCREW_REGISTRY_SIGNING_KEY=/path/to/key.pem python tools/publish.py --out dist
+# real: signs with the KMS key named by the id/ARN/alias
+KIROCREW_REGISTRY_KMS_KEY_ID=alias/kirocrew-apps-registry python tools/publish.py --out dist
 ```
 
 Output is `official-registry.json`, `editorial.json`, and a `.sig` sidecar for
 each.
+
+The private half never leaves KMS. Publishing asks for a signature over a digest
+it computed; it cannot read key material, so access to a runner buys signing for
+the life of that session rather than a key to keep. Before signing anything, the
+signer resolves the key's public half and requires the derived keyId to match a
+key published in `keys/` — a mistyped id fails the publish instead of minting
+signatures no reader can verify.
 
 ### Signing fails closed
 
 With no key configured, publishing **exits non-zero and writes nothing**. An
 unsigned catalog is not a lesser product — it is a document a client cannot
 distinguish from an attacker's copy of it. `.github/workflows/publish.yml`
-inherits this: a missing `REGISTRY_SIGNING_KEY` secret fails the run.
+inherits this: an unset `REGISTRY_KMS_KEY_ID` variable fails the run.
 
 ### `summary` is derived, not truncated
 
@@ -208,5 +215,8 @@ repository reaches a client today.
 GitHub Pages was tried first and is not available: Pages creation is disabled
 org-wide for `kirodotdev`.
 
-Signing-key custody is unassigned, so no `REGISTRY_SIGNING_KEY` secret exists yet
-and a real publish cannot run.
+The signing key is a CDK-owned KMS key (`RSA_3072`, `SIGN_VERIFY`, alias
+`alias/kirocrew-apps-registry`) in the external-apps account, reachable from CI
+by the OIDC role. Set `REGISTRY_KMS_KEY_ID` to its alias or ARN to enable a real
+publish; with it unset the workflow skips the upload rather than publishing
+unsigned.

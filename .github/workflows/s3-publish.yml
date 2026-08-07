@@ -44,9 +44,12 @@ jobs:
         env:
           ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
           BUCKET: ${{ vars.CATALOG_BUCKET }}
+          KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
         run: |
-          if [ -z "${ROLE_ARN:-}" ] || [ -z "${BUCKET:-}" ]; then
-            echo "::notice::AWS_ROLE_ARN / CATALOG_BUCKET not set; skipping upload." \
+          if [ -z "${ROLE_ARN:-}" ] || [ -z "${BUCKET:-}" ] \
+             || [ -z "${KMS_KEY_ID:-}" ]; then
+            echo "::notice::AWS_ROLE_ARN / CATALOG_BUCKET / REGISTRY_KMS_KEY_ID" \
+                 "not set; skipping upload." \
                  "See docs/distribution.md for the bucket and role this expects."
             echo "ready=false" >> "$GITHUB_OUTPUT"
           else
@@ -68,21 +71,26 @@ jobs:
         if: steps.cfg.outputs.ready == 'true'
         run: pytest tests/ -q
 
+      # Credentials are needed BEFORE publishing now, not only for the upload:
+      # signing is itself a KMS call. One role covers both -- signing and
+      # uploading run in this same job, on this same runner, so a second role
+      # would put two ARNs in one blast radius rather than isolating anything.
+      #
+      # us-west-2 serves both the signing key and the catalog bucket.
+      - uses: aws-actions/configure-aws-credentials@v4
+        if: steps.cfg.outputs.ready == 'true'
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-west-2
+
+      # No key material passes through the runner: the id names a key whose
+      # private half stays in KMS. The refusal to publish unsigned lives in
+      # publish.py, so it cannot be bypassed by invoking the tool another way.
       - name: Publish (signed)
         if: steps.cfg.outputs.ready == 'true'
         env:
-          SIGNING_KEY_PEM: ${{ secrets.REGISTRY_SIGNING_KEY }}
-        run: |
-          if [ -z "${SIGNING_KEY_PEM:-}" ]; then
-            echo "::error::REGISTRY_SIGNING_KEY is not configured; refusing to" \
-                 "publish an unsigned catalog."
-            exit 1
-          fi
-          umask 077
-          keyfile="$(mktemp)"
-          printf '%s' "$SIGNING_KEY_PEM" > "$keyfile"
-          KIROCREW_REGISTRY_SIGNING_KEY="$keyfile" python tools/publish.py --out dist
-          shred -u "$keyfile" 2>/dev/null || : > "$keyfile"
+          KIROCREW_REGISTRY_KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
+        run: python tools/publish.py --out dist
 
       # Verify against the PUBLIC key committed to this repository, not against
       # the signer's own output. This is the check that catches a signature
@@ -90,12 +98,6 @@ jobs:
       - name: Verify signatures before upload
         if: steps.cfg.outputs.ready == 'true'
         run: python tools/verify_dist.py dist
-
-      - uses: aws-actions/configure-aws-credentials@v4
-        if: steps.cfg.outputs.ready == 'true'
-        with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
-          aws-region: us-east-1
 
       # Two-stage upload, and the ORDER matters.
       #

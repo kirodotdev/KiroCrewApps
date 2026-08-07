@@ -14,6 +14,7 @@ up set in CI.
 from __future__ import annotations
 
 import base64
+import hashlib
 import json
 import re
 import subprocess
@@ -245,66 +246,176 @@ def test_normalize_author(value, expected):
 # --------------------------------------------------------------------------
 
 
-def write_key(path: Path):
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+class FakeKms:
+    """Stands in for the KMS client.
 
-    key = Ed25519PrivateKey.generate()
-    path.write_bytes(
-        key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
+    Backed by a real locally-generated RSA-3072 key that signs with the same
+    algorithm KMS uses, so the signatures produced here are checked by the real
+    verifier rather than by a mock that agrees with whatever it is given. The
+    only thing faked is the network.
+    """
+
+    def __init__(self, key_spec="RSA_3072", key_usage="SIGN_VERIFY"):
+        from cryptography.hazmat.primitives.asymmetric import rsa
+
+        self.key = rsa.generate_private_key(public_exponent=65537, key_size=3072)
+        self.key_spec = key_spec
+        self.key_usage = key_usage
+        self.get_public_key_calls = 0
+        self.sign_calls = []
+
+    def public_der(self) -> bytes:
+        from cryptography.hazmat.primitives import serialization
+
+        return self.key.public_key().public_bytes(
+            encoding=serialization.Encoding.DER,
+            format=serialization.PublicFormat.SubjectPublicKeyInfo,
         )
+
+    def get_public_key(self, KeyId):  # noqa: N803 - boto3 parameter casing
+        self.get_public_key_calls += 1
+        return {
+            "PublicKey": self.public_der(),
+            "KeySpec": self.key_spec,
+            "KeyUsage": self.key_usage,
+        }
+
+    def sign(self, KeyId, Message, MessageType, SigningAlgorithm):  # noqa: N803
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.hazmat.primitives.asymmetric import padding, utils
+
+        self.sign_calls.append(
+            {
+                "Message": Message,
+                "MessageType": MessageType,
+                "SigningAlgorithm": SigningAlgorithm,
+            }
+        )
+        if MessageType != "DIGEST":
+            raise AssertionError(f"unexpected MessageType {MessageType!r}")
+        return {
+            "Signature": self.key.sign(
+                Message, padding.PKCS1v15(), utils.Prehashed(hashes.SHA256())
+            )
+        }
+
+
+def publish_key(monkeypatch, keys_dir: Path, der: bytes, key_id=None) -> str:
+    """Commit a public key to a stand-in `keys/`, the way the repo does."""
+    keys_dir.mkdir(exist_ok=True)
+    key_id = key_id or hashlib.sha256(der).hexdigest()[:16]
+    (keys_dir / f"kms-{key_id}.pub").write_text(
+        base64.b64encode(der).decode("ascii") + "\n"
     )
-    return key
+    monkeypatch.setattr(publish, "KEYS_DIR", keys_dir)
+    return key_id
 
 
-def test_signature_verifies_against_the_exact_payload(tmp_path):
-    key = write_key(tmp_path / "k.pem")
+def verify_rsa(der: bytes, signature: bytes, payload: bytes) -> None:
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding
+
+    serialization.load_der_public_key(der).verify(
+        signature, payload, padding.PKCS1v15(), hashes.SHA256()
+    )
+
+
+def test_signature_verifies_against_the_exact_payload(tmp_path, monkeypatch):
+    kms = FakeKms()
+    key_id = publish_key(monkeypatch, tmp_path / "keys", kms.public_der())
     payload = b'{"schemaVersion": 1}\n'
-    sidecar = publish.sign_detached(payload, str(tmp_path / "k.pem"))
 
-    assert sidecar["algorithm"] == "ed25519"
-    key.public_key().verify(base64.b64decode(sidecar["signature"]), payload)
+    sidecar = publish.kms_signer("alias/whatever", kms)(payload)
+
+    assert sidecar["algorithm"] == "RSASSA_PKCS1_V1_5_SHA_256"
+    assert sidecar["keyId"] == key_id
+    assert sidecar["payloadSha256"] == hashlib.sha256(payload).hexdigest()
+    verify_rsa(kms.public_der(), base64.b64decode(sidecar["signature"]), payload)
 
 
-def test_signature_does_not_verify_against_altered_payload(tmp_path):
+def test_signature_does_not_verify_against_altered_payload(tmp_path, monkeypatch):
     from cryptography.exceptions import InvalidSignature
 
-    key = write_key(tmp_path / "k.pem")
-    sidecar = publish.sign_detached(b"original", str(tmp_path / "k.pem"))
+    kms = FakeKms()
+    publish_key(monkeypatch, tmp_path / "keys", kms.public_der())
+
+    sidecar = publish.kms_signer("alias/whatever", kms)(b"original")
     with pytest.raises(InvalidSignature):
-        key.public_key().verify(base64.b64decode(sidecar["signature"]), b"tampered")
-
-
-def test_missing_key_file_is_an_error(tmp_path):
-    with pytest.raises(publish.PublishError, match="not found"):
-        publish.sign_detached(b"x", str(tmp_path / "absent.pem"))
-
-
-def test_non_ed25519_key_is_refused(tmp_path):
-    from cryptography.hazmat.primitives import serialization
-    from cryptography.hazmat.primitives.asymmetric import rsa
-
-    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    path = tmp_path / "rsa.pem"
-    path.write_bytes(
-        key.private_bytes(
-            encoding=serialization.Encoding.PEM,
-            format=serialization.PrivateFormat.PKCS8,
-            encryption_algorithm=serialization.NoEncryption(),
+        verify_rsa(
+            kms.public_der(), base64.b64decode(sidecar["signature"]), b"tampered"
         )
-    )
-    with pytest.raises(publish.PublishError, match="ed25519"):
-        publish.sign_detached(b"x", str(path))
+
+
+def test_signing_asks_kms_for_a_digest_not_the_whole_document(tmp_path, monkeypatch):
+    """KMS caps a RAW message at 4096 bytes, which the catalog will outgrow."""
+    kms = FakeKms()
+    publish_key(monkeypatch, tmp_path / "keys", kms.public_der())
+    payload = b"x" * 9000
+
+    publish.kms_signer("alias/whatever", kms)(payload)
+
+    call = kms.sign_calls[0]
+    assert call["MessageType"] == "DIGEST"
+    assert call["Message"] == hashlib.sha256(payload).digest()
+    assert call["SigningAlgorithm"] == "RSASSA_PKCS1_V1_5_SHA_256"
+
+
+def test_public_key_is_resolved_once_not_once_per_document(tmp_path, monkeypatch):
+    """Two documents must not be able to disagree about which key signed them."""
+    kms = FakeKms()
+    publish_key(monkeypatch, tmp_path / "keys", kms.public_der())
+
+    sign = publish.kms_signer("alias/whatever", kms)
+    sign(b"first")
+    sign(b"second")
+
+    assert kms.get_public_key_calls == 1
+    assert len(kms.sign_calls) == 2
+
+
+def test_key_absent_from_keys_dir_is_refused_before_signing(tmp_path, monkeypatch):
+    """A mistyped key id must fail here, not mint unverifiable signatures."""
+    kms = FakeKms()
+    other = FakeKms()
+    publish_key(monkeypatch, tmp_path / "keys", other.public_der())
+
+    with pytest.raises(publish.PublishError, match="not published in keys/"):
+        publish.kms_signer("alias/typo", kms)
+    assert kms.sign_calls == []
+
+
+def test_keys_entry_that_disagrees_with_the_live_key_is_refused(tmp_path, monkeypatch):
+    """The filename claims the live key's id, but the material is another key."""
+    kms = FakeKms()
+    impostor = FakeKms()
+    live_id = hashlib.sha256(kms.public_der()).hexdigest()[:16]
+    publish_key(monkeypatch, tmp_path / "keys", impostor.public_der(), key_id=live_id)
+
+    with pytest.raises(publish.PublishError, match="material differs"):
+        publish.kms_signer("alias/whatever", kms)
+
+
+def test_wrong_key_spec_is_refused(tmp_path, monkeypatch):
+    kms = FakeKms(key_spec="RSA_2048")
+    publish_key(monkeypatch, tmp_path / "keys", kms.public_der())
+
+    with pytest.raises(publish.PublishError, match="expected RSA_3072/SIGN_VERIFY"):
+        publish.kms_signer("alias/whatever", kms)
+
+
+def test_encrypt_only_key_is_refused(tmp_path, monkeypatch):
+    kms = FakeKms(key_usage="ENCRYPT_DECRYPT")
+    publish_key(monkeypatch, tmp_path / "keys", kms.public_der())
+
+    with pytest.raises(publish.PublishError, match="expected RSA_3072/SIGN_VERIFY"):
+        publish.kms_signer("alias/whatever", kms)
 
 
 def test_publish_fails_closed_without_a_key(tmp_path):
     """An unsigned catalog is not a lesser product: a client cannot tell it from
     an attacker's copy. So nothing may be written at all."""
     out = tmp_path / "dist"
-    findings = publish.publish(out, dry_run=False, key_path=None)
+    findings = publish.publish(out, dry_run=False, key_id=None)
     assert any("Refusing to emit an unsigned catalog" in e for e in findings.errors)
     assert not out.exists() or not list(out.iterdir())
 
@@ -411,6 +522,20 @@ def test_canonical_bytes_are_what_gets_signed():
     assert publish.canonical_bytes(doc) == (json.dumps(doc, indent=2) + "\n").encode()
 
 
+def test_canonical_bytes_keep_non_ascii_unescaped():
+    """`ensure_ascii=False` is load-bearing, and the assertion above cannot see it.
+
+    Escaping non-ASCII would change the bytes served while every signature is
+    taken over the bytes served -- so dropping that argument would produce a
+    catalog that fails verification only once an app carries a non-ASCII summary.
+    """
+    doc = {"schemaVersion": 1, "summary": "日本語"}
+    assert publish.canonical_bytes(doc) == (
+        json.dumps(doc, indent=2, ensure_ascii=False) + "\n"
+    ).encode("utf-8")
+    assert "日本語".encode("utf-8") in publish.canonical_bytes(doc)
+
+
 # --------------------------------------------------------------------------
 # End to end: a real repo, a real key, and a signature checked over the bytes
 # actually written. The production catalog is empty, so without this the whole
@@ -475,9 +600,12 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
     # emitted url is still the local path.
     monkeypatch.setattr(publish, "SCHEMA_DIR", relaxed)
 
-    key = write_key(tmp_path / "k.pem")
+    kms = FakeKms()
+    publish_key(monkeypatch, tmp_path / "keys", kms.public_der())
     out = tmp_path / "dist"
-    findings = publish.publish(out, dry_run=False, key_path=str(tmp_path / "k.pem"))
+    findings = publish.publish(
+        out, dry_run=False, key_id="alias/kirocrew-apps-registry", kms_client=kms
+    )
     assert findings.errors == [], findings.errors
 
     registry = json.loads((out / "official-registry.json").read_text())
@@ -496,5 +624,5 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
     for name in ("official-registry.json", "editorial.json"):
         payload = (out / name).read_bytes()
         sidecar = json.loads((out / f"{name}.sig").read_text())
-        assert sidecar["payloadSha256"] == __import__("hashlib").sha256(payload).hexdigest()
-        key.public_key().verify(base64.b64decode(sidecar["signature"]), payload)
+        assert sidecar["payloadSha256"] == hashlib.sha256(payload).hexdigest()
+        verify_rsa(kms.public_der(), base64.b64decode(sidecar["signature"]), payload)

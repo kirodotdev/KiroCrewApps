@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import base64
 import hashlib
+import hmac
 import json
 import os
 import re
@@ -46,9 +47,11 @@ from typing import Any, Callable
 ROOT = Path(__file__).resolve().parent.parent
 CATALOG_DIR = ROOT / "catalog"
 SCHEMA_DIR = ROOT / "schema"
+KEYS_DIR = ROOT / "keys"
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from validate import Findings, check_schema, validate  # noqa: E402
+from verify_dist import load_public_keys  # noqa: E402
 
 SUMMARY_MAX = 200
 TAGS_MAX = 16
@@ -360,46 +363,100 @@ def build_editorial(authored: dict[str, Any], now: datetime) -> dict[str, Any]:
     }
 
 
-def sign_detached(payload: bytes, key_path: str) -> dict[str, Any]:
-    """Produce a detached ed25519 signature sidecar.
+KMS_SIGNING_ALGORITHM = "RSASSA_PKCS1_V1_5_SHA_256"
+KMS_KEY_SPEC = "RSA_3072"
 
-    Detached because every document sets ``additionalProperties: false`` with no
-    signature slot, so the bytes verified are exactly the bytes parsed.
+
+def kms_signer(
+    key_id: str, client: Any | None = None
+) -> Callable[[bytes], dict[str, Any]]:
+    """Resolve a KMS signing key, then return a callable that signs payloads.
+
+    Detached signatures, because every document sets ``additionalProperties:
+    false`` with no signature slot -- so the bytes verified are exactly the bytes
+    parsed.
+
+    The private half never leaves KMS. This asks for a signature over a digest we
+    computed; it cannot obtain key material, so a compromised runner can borrow
+    signing for the life of its session but cannot sign anything afterwards.
+
+    The key is resolved and reconciled against the trust root in ``keys/`` BEFORE
+    any document is signed, and the whole publish fails if that fails. A
+    mistyped key id would otherwise mint signatures no published key can verify,
+    and the damage would surface as an unverifiable catalog rather than as the
+    configuration error it actually is.
+
+    Returned as a closure so ``GetPublicKey`` runs once per publish rather than
+    once per document -- two documents must not be able to disagree about which
+    key signed them.
     """
+    if client is None:  # pragma: no cover - exercised with an injected client
+        try:
+            import boto3
+        except ImportError as exc:
+            raise PublishError(
+                "signing requires the `boto3` package "
+                "(pip install -r tools/requirements.txt)"
+            ) from exc
+        client = boto3.client("kms")
+
     try:
-        from cryptography.hazmat.primitives import serialization
-        from cryptography.hazmat.primitives.asymmetric.ed25519 import (
-            Ed25519PrivateKey,
-        )
-    except ImportError as exc:  # pragma: no cover
-        raise PublishError(
-            "signing requires the `cryptography` package "
-            "(pip install -r tools/requirements.txt)"
-        ) from exc
+        described = client.get_public_key(KeyId=key_id)
+    except Exception as exc:  # noqa: BLE001 - boto3 raises service-specific types
+        raise PublishError(f"could not read public key for {key_id!r}: {exc}") from exc
 
-    path = Path(key_path)
-    if not path.is_file():
-        raise PublishError(f"signing key not found: {key_path}")
-
-    key = serialization.load_pem_private_key(path.read_bytes(), password=None)
-    if not isinstance(key, Ed25519PrivateKey):
+    spec, usage = described.get("KeySpec"), described.get("KeyUsage")
+    if spec != KMS_KEY_SPEC or usage != "SIGN_VERIFY":
         raise PublishError(
-            f"signing key must be ed25519, got {type(key).__name__}"
+            f"signing key {key_id!r} is {spec}/{usage}, "
+            f"expected {KMS_KEY_SPEC}/SIGN_VERIFY"
         )
 
-    public = key.public_key().public_bytes(
-        encoding=serialization.Encoding.Raw,
-        format=serialization.PublicFormat.Raw,
-    )
-    return {
-        "algorithm": "ed25519",
-        "keyId": hashlib.sha256(public).hexdigest()[:16],
-        "payloadSha256": hashlib.sha256(payload).hexdigest(),
-        "signature": base64.b64encode(key.sign(payload)).decode("ascii"),
-    }
+    der = described["PublicKey"]
+    key_ref = hashlib.sha256(der).hexdigest()[:16]
+
+    published = load_public_keys(KEYS_DIR)
+    if key_ref not in published:
+        raise PublishError(
+            f"signing key {key_id!r} resolves to keyId {key_ref!r}, which is not "
+            f"published in keys/ -- no reader could verify what it signs"
+        )
+    if not hmac.compare_digest(published[key_ref], der):
+        raise PublishError(
+            f"keys/ publishes {key_ref!r} but its material differs from the live "
+            f"public key of {key_id!r}"
+        )
+
+    def sign(payload: bytes) -> dict[str, Any]:
+        # DIGEST rather than RAW: KMS caps a RAW message at 4096 bytes, and the
+        # registry outgrows that as apps are added. Hashing here keeps the
+        # request a fixed size no matter how large the catalog gets, and the
+        # digest is published in the sidecar either way.
+        try:
+            signed = client.sign(
+                KeyId=key_id,
+                Message=hashlib.sha256(payload).digest(),
+                MessageType="DIGEST",
+                SigningAlgorithm=KMS_SIGNING_ALGORITHM,
+            )
+        except Exception as exc:  # noqa: BLE001 - boto3 raises service-specific types
+            raise PublishError(f"signing failed for {key_id!r}: {exc}") from exc
+        return {
+            "algorithm": KMS_SIGNING_ALGORITHM,
+            "keyId": key_ref,
+            "payloadSha256": hashlib.sha256(payload).hexdigest(),
+            "signature": base64.b64encode(signed["Signature"]).decode("ascii"),
+        }
+
+    return sign
 
 
-def publish(out_dir: Path, dry_run: bool, key_path: str | None) -> Findings:
+def publish(
+    out_dir: Path,
+    dry_run: bool,
+    key_id: str | None,
+    kms_client: Any | None = None,
+) -> Findings:
     findings = Findings()
 
     registry_path = CATALOG_DIR / "official-registry.json"
@@ -456,21 +513,21 @@ def publish(out_dir: Path, dry_run: bool, key_path: str | None) -> Findings:
     if dry_run:
         findings.warn("dry run: refs not resolved, fields not baked, nothing signed")
     else:
-        if not key_path:
+        if not key_id:
             # Fail closed. A signature is the acceptance gate for Official
             # trust, so an unsigned document is not a lesser product -- it is a
             # document a client cannot distinguish from an attacker's.
             findings.error(
-                "no signing key configured: set KIROCREW_REGISTRY_SIGNING_KEY "
-                "to an ed25519 private key PEM. Refusing to emit an unsigned "
+                "no signing key configured: set KIROCREW_REGISTRY_KMS_KEY_ID to "
+                "the KMS key id, ARN or alias. Refusing to emit an unsigned "
                 "catalog."
             )
             return findings
         try:
+            sign = kms_signer(key_id, kms_client)
             for filename, payload in list(artifacts.items()):
-                sidecar = sign_detached(payload, key_path)
                 artifacts[f"{filename}.sig"] = (
-                    json.dumps(sidecar, indent=2) + "\n"
+                    json.dumps(sign(payload), indent=2) + "\n"
                 ).encode("utf-8")
         except PublishError as exc:
             findings.error(str(exc))
@@ -499,7 +556,7 @@ def main(argv: list[str]) -> int:
     findings = publish(
         Path(args.out),
         args.dry_run,
-        os.environ.get("KIROCREW_REGISTRY_SIGNING_KEY"),
+        os.environ.get("KIROCREW_REGISTRY_KMS_KEY_ID"),
     )
 
     for warning in findings.warnings:

@@ -46,10 +46,41 @@ def load_public_keys(keys_dir: Path = KEYS_DIR) -> dict[str, bytes]:
     return keys
 
 
+def _verify_ed25519(raw: bytes, signature: bytes, payload: bytes) -> None:
+    """The bootstrap algorithm. Retained so revisions published before the move
+    to KMS stay verifiable -- immutable revisions are immutable, including their
+    signatures."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
+
+    Ed25519PublicKey.from_public_bytes(raw).verify(signature, payload)
+
+
+def _verify_rsa_pkcs1_sha256(raw: bytes, signature: bytes, payload: bytes) -> None:
+    """Verify a signature from the KMS RSA_3072 key.
+
+    ``raw`` is a DER SPKI blob rather than bare key bytes -- RSA has no raw
+    encoding, which is also why keyId is a hash over the SPKI DER.
+    """
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import padding, rsa
+
+    key = serialization.load_der_public_key(raw)
+    if not isinstance(key, rsa.RSAPublicKey):
+        raise ValueError(f"key material is {type(key).__name__}, not RSA")
+    key.verify(signature, payload, padding.PKCS1v15(), hashes.SHA256())
+
+
+# An allowlist, not a lookup with a fallback: an algorithm this verifier does not
+# implement must be a refusal, never a skipped check.
+SIGNATURE_ALGORITHMS = {
+    "ed25519": _verify_ed25519,
+    "RSASSA_PKCS1_V1_5_SHA_256": _verify_rsa_pkcs1_sha256,
+}
+
+
 def verify_dir(dist: Path, keys: dict[str, bytes] | None = None) -> list[str]:
     """Return a list of problems; empty means everything verified."""
     from cryptography.exceptions import InvalidSignature
-    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PublicKey
 
     if keys is None:
         keys = load_public_keys()
@@ -90,8 +121,9 @@ def verify_dir(dist: Path, keys: dict[str, bytes] | None = None) -> list[str]:
             )
             continue
 
-        if sidecar.get("algorithm") != "ed25519":
-            problems.append(f"{doc.name}: unexpected algorithm {sidecar.get('algorithm')!r}")
+        algorithm = sidecar.get("algorithm")
+        if algorithm not in SIGNATURE_ALGORITHMS:
+            problems.append(f"{doc.name}: unexpected algorithm {algorithm!r}")
             continue
 
         digest = hashlib.sha256(payload).hexdigest()
@@ -102,15 +134,27 @@ def verify_dir(dist: Path, keys: dict[str, bytes] | None = None) -> list[str]:
             )
             continue
 
+        # A sidecar missing this field, or carrying something that is not base64,
+        # is a verification failure like any other -- not a crash. This runs as a
+        # pre-upload gate, where a traceback would be a far less useful answer
+        # than a named problem.
+        encoded = sidecar.get("signature")
+        if not isinstance(encoded, str):
+            problems.append(f"{doc.name}: sidecar has no signature")
+            continue
         try:
-            Ed25519PublicKey.from_public_bytes(keys[key_id]).verify(
-                base64.b64decode(sidecar["signature"]), payload
-            )
+            signature = base64.b64decode(encoded, validate=True)
+        except ValueError as exc:  # binascii.Error subclasses ValueError
+            problems.append(f"{doc.name}: signature is not valid base64 ({exc})")
+            continue
+
+        try:
+            SIGNATURE_ALGORITHMS[algorithm](keys[key_id], signature, payload)
         except (InvalidSignature, ValueError, TypeError) as exc:
             problems.append(f"{doc.name}: signature does not verify ({exc})")
             continue
 
-        print(f"verified {doc.name} ({len(payload)} bytes, key {key_id})")
+        print(f"verified {doc.name} ({len(payload)} bytes, {algorithm}, key {key_id})")
 
     return problems
 
