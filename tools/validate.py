@@ -197,43 +197,48 @@ def check_cross_document(
         if count > 1:
             findings.error(f"editorial: category id {cid!r} declared {count} times")
 
-    # Single-category membership, enforced by construction. A partitioned rail
-    # is the whole point of the taxonomy; an app in two categories renders
-    # twice and makes the counts disagree with the catalog. Cross-cutting
-    # collections are what `rail` sections are for.
-    owner: dict[str, str] = {}
-    for cat in categories:
-        if not isinstance(cat, dict):
+    # Membership is stated on each app, so the taxonomy has exactly one home:
+    # the ids declared here. A schema cannot reference another document, so the
+    # id PATTERN is checked there and EXISTENCE is checked here -- duplicating
+    # the list into a schema enum would be a second source of truth that drifts.
+    known = {c.get("id") for c in categories if isinstance(c, dict)}
+    used: set[str] = set()
+    for entry in registry.get("apps") or []:
+        if not isinstance(entry, dict):
             continue
-        cid = cat.get("id")
-        for ref in cat.get("appRefs") or []:
-            if ref not in owner:
-                owner[ref] = cid
-            elif owner[ref] == cid:
-                # Same category twice is a different mistake from being in two
-                # categories, and "in categories 'a' and 'a'" reads as nonsense.
+        name = entry.get("name")
+        listed = entry.get("categories") or []
+        for cid in listed:
+            if cid not in known:
                 findings.error(
-                    f"editorial: app {ref!r} is listed twice in category {cid!r}"
+                    f"app {name!r}: category {cid!r} is not declared in "
+                    f"editorial.json (known: {', '.join(sorted(known)) or 'none'})"
                 )
             else:
-                findings.error(
-                    f"editorial: app {ref!r} is in categories {owner[ref]!r} and "
-                    f"{cid!r}; membership is single-valued (use a 'rail' section "
-                    f"for cross-cutting collections)"
-                )
+                used.add(cid)
+        # The rails are a partition, so only the FIRST entry places the app. A
+        # second is discovery-only, and a third would mean the placement rule
+        # had stopped being obvious -- the schema caps the list at two.
+        if len(listed) > 1 and name not in tombstoned:
+            findings.warn(
+                f"app {name!r}: primary category is {listed[0]!r}; {listed[1]!r} "
+                f"widens search only and does not place the app in that rail"
+            )
 
     # Every reference must resolve through the registry. Editorial only ever
     # REFERENCES apps, which is what stops it inventing a phantom entry.
     def check_refs(refs: list[Any], where: str) -> None:
+        for ref, count in Counter(refs).items():
+            if count > 1:
+                # Renders the app twice in one rail. A slip rather than a
+                # decision, and the only place duplicates can still arise now
+                # that membership is single-valued on the entry.
+                findings.error(f"{where}: appRef {ref!r} is listed {count} times")
         for ref in refs:
             if ref not in declared:
                 findings.error(f"{where}: appRef {ref!r} is not declared in the registry")
             elif ref in tombstoned:
                 findings.error(f"{where}: appRef {ref!r} refers to a tombstoned app")
-
-    for cat in categories:
-        if isinstance(cat, dict):
-            check_refs(cat.get("appRefs") or [], f"editorial: category {cat.get('id')!r}")
 
     for idx, section in enumerate(editorial.get("sections") or []):
         if not isinstance(section, dict):
@@ -246,11 +251,22 @@ def check_cross_document(
     # Not fatal: a declared app in no category is legitimate and lands in the
     # default bucket rather than disappearing. Worth saying out loud, because
     # the usual cause is a forgotten membership edit.
-    uncategorized = sorted(declared - set(owner) - tombstoned)
+    uncategorized = sorted(
+        e.get("name")
+        for e in registry.get("apps") or []
+        if isinstance(e, dict) and not e.get("categories") and e.get("name") not in tombstoned
+    )
     if uncategorized:
         findings.warn(
             f"{len(uncategorized)} app(s) in no category, will render in the "
             f"default bucket: {', '.join(uncategorized)}"
+        )
+
+    # An empty rail is a curation smell, not an error: a category may exist
+    # ahead of the app that will fill it.
+    if empty := sorted(known - used):
+        findings.warn(
+            f"{len(empty)} category(ies) with no apps: {', '.join(empty)}"
         )
 
 

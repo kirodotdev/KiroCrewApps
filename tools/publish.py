@@ -280,6 +280,11 @@ def bake_entry(
 
     entry: dict[str, Any] = {"name": name, "source": source}
 
+    # Carried through verbatim, not derived: membership is ours to assign, and
+    # reading it from the manifest would let an author place their own app.
+    if categories := authored.get("categories"):
+        entry["categories"] = list(categories)
+
     if display := (manifest.get("displayName") or "").strip():
         entry["displayName"] = display[:60]
     if summary := derive_summary(manifest.get("description", ""), findings, name):
