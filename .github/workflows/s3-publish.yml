@@ -4,10 +4,13 @@ name: Publish catalog to S3
 # object layout below is chosen so that adding one does not require changing
 # either the paths or the client.
 #
-# Not wired until the two repository variables exist. Until then this workflow is
-# manual-only and exits early with a clear message rather than failing obscurely:
-#   AWS_ROLE_ARN   - role assumed via GitHub OIDC (see docs/distribution.md)
-#   CATALOG_BUCKET - destination bucket
+# Requires three repository variables. If any is unset the run FAILS rather than
+# quietly doing nothing -- a green "Publish catalog to S3" that published nothing
+# is worse than a red one, because the tick is the only signal most readers ever
+# look at:
+#   AWS_ROLE_ARN         - role assumed via GitHub OIDC (see docs/distribution.md)
+#   CATALOG_BUCKET       - destination bucket
+#   REGISTRY_KMS_KEY_ID  - KMS signing key id, ARN or alias
 on:
   workflow_dispatch:
   push:
@@ -40,35 +43,39 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Check distribution is configured
-        id: cfg
         env:
           ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
           BUCKET: ${{ vars.CATALOG_BUCKET }}
           KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
         run: |
-          if [ -z "${ROLE_ARN:-}" ] || [ -z "${BUCKET:-}" ] \
-             || [ -z "${KMS_KEY_ID:-}" ]; then
-            echo "::notice::AWS_ROLE_ARN / CATALOG_BUCKET / REGISTRY_KMS_KEY_ID" \
-                 "not set; skipping upload." \
-                 "See docs/distribution.md for the bucket and role this expects."
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
+          # Missing configuration FAILS the run. It used to skip every
+          # publishing step and exit 0, which reported success for a run that
+          # published nothing -- the one signal anybody reads, saying the
+          # opposite of what happened. Both triggers here mean "publish now"
+          # (a push to main that touched the catalog, or a human dispatching
+          # the workflow), so there is no context in which having nothing to do
+          # is the correct outcome.
+          missing=""
+          [ -n "${ROLE_ARN:-}" ]   || missing="$missing AWS_ROLE_ARN"
+          [ -n "${BUCKET:-}" ]     || missing="$missing CATALOG_BUCKET"
+          [ -n "${KMS_KEY_ID:-}" ] || missing="$missing REGISTRY_KMS_KEY_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Cannot publish: unset repository variable(s):${missing}." \
+                 "Set them under Settings > Secrets and variables > Actions > Variables." \
+                 "See docs/distribution.md for the bucket, role and signing key expected."
+            exit 1
           fi
 
       - uses: actions/setup-python@v5
-        if: steps.cfg.outputs.ready == 'true'
         with:
           python-version: "3.12"
 
       - name: Install dependencies
-        if: steps.cfg.outputs.ready == 'true'
         run: pip install -r tools/requirements.txt pytest
 
       # The artifact about to be signed is whatever is on disk now, so the gate
       # runs here rather than trusting that main was green when it merged.
       - name: Contract and pipeline tests
-        if: steps.cfg.outputs.ready == 'true'
         run: pytest tests/ -q
 
       # Credentials are needed BEFORE publishing now, not only for the upload:
@@ -78,7 +85,6 @@ jobs:
       #
       # us-west-2 serves both the signing key and the catalog bucket.
       - uses: aws-actions/configure-aws-credentials@v4
-        if: steps.cfg.outputs.ready == 'true'
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: us-west-2
@@ -87,7 +93,6 @@ jobs:
       # private half stays in KMS. The refusal to publish unsigned lives in
       # publish.py, so it cannot be bypassed by invoking the tool another way.
       - name: Publish (signed)
-        if: steps.cfg.outputs.ready == 'true'
         env:
           KIROCREW_REGISTRY_KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
         run: python tools/publish.py --out dist
@@ -96,7 +101,6 @@ jobs:
       # the signer's own output. This is the check that catches a signature
       # minted over different bytes than the file about to be uploaded.
       - name: Verify signatures before upload
-        if: steps.cfg.outputs.ready == 'true'
         run: python tools/verify_dist.py dist
 
       # Two-stage upload, and the ORDER matters.
@@ -113,7 +117,6 @@ jobs:
       # id is content-derived, so identical content reuses the key harmlessly and
       # changed content gets a new one.
       - name: Upload immutable revision
-        if: steps.cfg.outputs.ready == 'true'
         env:
           BUCKET: ${{ vars.CATALOG_BUCKET }}
         run: |
@@ -131,7 +134,6 @@ jobs:
       # withdrawn app that stays visible is the failure this catalog is built to
       # avoid.
       - name: Update rolling pointer
-        if: steps.cfg.outputs.ready == 'true'
         env:
           BUCKET: ${{ vars.CATALOG_BUCKET }}
         run: |
@@ -144,7 +146,6 @@ jobs:
             --cache-control "public, max-age=300" --no-progress
 
       - name: Report the URLs
-        if: steps.cfg.outputs.ready == 'true'
         env:
           BUCKET: ${{ vars.CATALOG_BUCKET }}
         run: |
