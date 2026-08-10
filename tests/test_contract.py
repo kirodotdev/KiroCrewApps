@@ -605,3 +605,216 @@ def test_examples_are_a_consistent_pair():
         findings,
     )
     assert findings.errors == []
+
+
+# --------------------------------------------------------------------------
+# The builtin source type
+#
+# Every reject case here is a shape that would put a CLONE TARGET back into a
+# built-in's published source -- the duplication the type exists to prevent. The
+# variant closes `additionalProperties`, so these are unrepresentable rather than
+# merely discouraged, and that is what these cases pin.
+# --------------------------------------------------------------------------
+
+
+def builtin(
+    name: str = "demo-app",
+    manifest_from: dict | None = None,
+    categories=None,
+    **source_extra,
+) -> dict:
+    source: dict = {"type": "builtin", **source_extra}
+    if manifest_from is not None:
+        source["manifestFrom"] = manifest_from
+    else:
+        source["manifestFrom"] = {
+            "url": "https://github.com/kirodotdev/KiroCrew.git",
+            "ref": "main",
+            "subdir": "src/apps/builtins/demo_app",
+        }
+    entry = {"name": name, "source": source}
+    entry["categories"] = categories if categories is not None else ["developer-tools"]
+    return entry
+
+
+def _editorial_with_developer_tools() -> dict:
+    return base_editorial(
+        categories=[{"id": "developer-tools", "label": "Developer Tools", "order": 10}]
+    )
+
+
+def test_accepts_a_builtin_entry(tmp_path):
+    assert (
+        errors_for(tmp_path, base_registry(builtin()), _editorial_with_developer_tools())
+        == []
+    )
+
+
+def test_accepts_a_builtin_without_minclientversion(tmp_path):
+    """Optional on purpose: the earliest carrying release is often unknown, and
+    stating an unverified one would tell a client that already HAS the app to
+    update before it can use it."""
+    entry = builtin()
+    assert "minClientVersion" not in entry["source"]
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) == []
+
+
+@pytest.mark.parametrize(
+    "version",
+    ["0.2.0", "0.2.0-nightly.20260806t065257", "0.2.0-rc.1", "1.0.0+build.5"],
+)
+def test_accepts_real_shipping_version_shapes(tmp_path, version):
+    """Prereleases are real shipping versions: `0.2.0-nightly.20260806t065257` is
+    the literal string the installed nightly carries. A release-only pattern
+    would make the earliest carrying release unnameable for anything that first
+    shipped on a nightly."""
+    entry = builtin(minClientVersion=version)
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) == []
+
+
+@pytest.mark.parametrize(
+    "version",
+    [
+        "latest",
+        "0.2",
+        "v0.2.0",
+        "",
+        "0.2.0junk",
+        "0.2.0 see evil.example",  # unanchored pattern would accept the suffix
+    ],
+)
+def test_rejects_a_malformed_minclientversion(tmp_path, version):
+    """The last two cases are what the `$` anchor buys: without it a trailing
+    payload validates, gets signed, and renders. Both are under the 32-char cap,
+    so each fails on the ANCHOR rather than on length."""
+    entry = builtin(minClientVersion=version)
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+
+
+def test_rejects_a_builtin_carrying_a_top_level_url(tmp_path):
+    """A built-in resolves from the client's own inventory. A url here is a clone
+    target for code the client already has."""
+    entry = builtin()
+    entry["source"]["url"] = "https://github.com/kirodotdev/KiroCrew.git"
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+
+
+def test_rejects_a_builtin_carrying_a_top_level_ref(tmp_path):
+    entry = builtin()
+    entry["source"]["ref"] = "a" * 40
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+
+
+def test_rejects_a_builtin_with_no_manifest_from(tmp_path):
+    """Publish has to read the app's app.json from somewhere to derive display
+    fields; without it the entry would bake to identity alone."""
+    entry = {"name": "demo-app", "source": {"type": "builtin"}, "categories": ["developer-tools"]}
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://github.com/kirodotdev/KiroCrew.git",
+        "ext::sh -c whoami",
+        "file:///etc/passwd",
+        "git@github.com:kirodotdev/KiroCrew.git",
+    ],
+)
+def test_rejects_a_non_https_manifest_from_url(tmp_path, url):
+    """`manifestFrom.url` reaches `git fetch`, so it gets the same scheme
+    restriction as any other source url -- being publish-time-only does not make
+    it inert."""
+    entry = builtin(manifest_from={"url": url, "ref": "main"})
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+
+
+@pytest.mark.parametrize(
+    "subdir",
+    ["/etc", "../../etc", "src/../../etc", "src\\apps", ""],
+)
+def test_rejects_an_escaping_manifest_from_subdir(tmp_path, subdir):
+    entry = builtin(
+        manifest_from={
+            "url": "https://github.com/kirodotdev/KiroCrew.git",
+            "ref": "main",
+            "subdir": subdir,
+        }
+    )
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+
+
+# --------------------------------------------------------------------------
+# The PUBLISHED schema, checked directly.
+#
+# Everything above validates the AUTHORED document. The published schema is the
+# signed contract a client reads, and nothing above exercises it -- so a change
+# to its patterns could go green while shipping a document no client should
+# accept. These cases close that gap.
+# --------------------------------------------------------------------------
+
+
+def published_errors_for(*apps: dict) -> list[str]:
+    from validate import Findings, check_schema
+
+    findings = Findings()
+    check_schema(
+        {
+            "schemaVersion": 1,
+            "generatedAt": "2026-01-01T00:00:00Z",
+            "revision": "2026-01-01T00:00:00Z-abcdef1",
+            "apps": list(apps),
+        },
+        SCHEMA_DIR / "official-registry.schema.json",
+        "official-registry.json",
+        findings,
+    )
+    return findings.errors
+
+
+def published_builtin(**source_extra) -> dict:
+    return {"name": "demo-app", "source": {"type": "builtin", **source_extra}}
+
+
+def test_published_builtin_needs_no_fetch_coordinates_at_all():
+    """`{"type": "builtin"}` alone is a complete, valid published source: there is
+    nothing to fetch and no digest, because integrity comes from the signed
+    application bundle the app ships inside."""
+    assert published_errors_for(published_builtin()) == []
+
+
+@pytest.mark.parametrize(
+    "version", ["0.2.0", "0.2.0-nightly.20260806t065257", "0.2.0-rc.1", "1.0.0+build.5"]
+)
+def test_published_schema_accepts_real_shipping_versions(version):
+    """A release-only pattern here would reject the version the installed nightly
+    literally carries."""
+    assert published_errors_for(published_builtin(minClientVersion=version)) == []
+
+
+@pytest.mark.parametrize(
+    "version", ["latest", "0.2", "v0.2.0", "", "0.2.0junk", "0.2.0 see evil.example"]
+)
+def test_published_schema_rejects_a_malformed_version(version):
+    """Both trailing-payload cases sit under the 32-char cap, so each one fails on
+    the `$` anchor rather than on maxLength -- which is what makes them pin the
+    anchor rather than merely appear to."""
+    assert published_errors_for(published_builtin(minClientVersion=version)) != []
+
+
+@pytest.mark.parametrize(
+    "extra",
+    [
+        {"url": "https://github.com/kirodotdev/KiroCrew.git"},
+        {"ref": "a" * 40},
+        {"manifestFrom": {"url": "https://example.com/a.git", "ref": "main"}},
+        {"sha256": "a" * 64},
+        {"subdir": "src/apps"},
+    ],
+)
+def test_published_builtin_cannot_carry_a_fetch_target(extra):
+    """Closed `additionalProperties` is the mechanism: it makes a published
+    built-in with somewhere to clone from UNREPRESENTABLE, rather than leaving it
+    to publish to remember to strip. `manifestFrom` is in this list because
+    leaking it is the specific regression the strip prevents."""
+    assert published_errors_for(published_builtin(**extra)) != []

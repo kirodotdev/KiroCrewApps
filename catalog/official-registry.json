@@ -17,6 +17,348 @@
         "developer-tools"
       ],
       "note": "LaunchDarkly Labs; public repo, best-effort support per their CONTRIBUTING. Read-only app: changes no flag state."
+    },
+    {
+      "name": "agent-worlds",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/agent_worlds"
+        }
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "auto-improvement",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/auto_improvement"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "auto-research",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/auto_research"
+        }
+      },
+      "categories": [
+        "research-writing"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "channels",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/channels"
+        }
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "code-review-sage",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/code_review_sage"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "crew-companion",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/crew_companion"
+        }
+      },
+      "categories": [
+        "other"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "design-critique",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/design_critique"
+        }
+      },
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "dev-fleet",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/dev_fleet"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "file-explorer",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/file_explorer"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "issue-radar",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/issue_radar"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "md-notebook",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/md_notebook"
+        }
+      },
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "meetings",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/meetings"
+        }
+      },
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "mochi",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/mochi"
+        }
+      },
+      "categories": [
+        "other"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "ops-mission-control",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/ops_mission_control"
+        }
+      },
+      "categories": [
+        "oncall-ops"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "papyrus",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/papyrus"
+        }
+      },
+      "categories": [
+        "research-writing"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "pptx-maker",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/pptx_maker"
+        }
+      },
+      "categories": [
+        "research-writing"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "projects",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/projects"
+        }
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "spec-builder",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/spec_builder"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "workflows",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "subdir": "src/kiro_crew/apps/builtins/workflows"
+        }
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
     }
   ],
   "removed": [],

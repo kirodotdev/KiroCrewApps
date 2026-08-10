@@ -17,8 +17,10 @@ import base64
 import hashlib
 import json
 import re
+import shutil
 import subprocess
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -45,11 +47,6 @@ def allow_local_urls(monkeypatch):
     monkeypatch.setattr(
         publish, "GIT_ENV", {**publish.GIT_ENV, "GIT_ALLOW_PROTOCOL": "https:file"}
     )
-    # The fixture apps stand in for first-party ones (`demo-app`, authored by
-    # kirocrew), but a temp repo cannot live under the real org url, so the
-    # provenance prefix is relaxed alongside the transport. Relaxed here for the
-    # same reason as the two above: a production opt-out would get set in CI.
-    monkeypatch.setattr(publish, "FIRST_PARTY_URL_PREFIX", "/")
 
 
 def git(*args: str, cwd: Path) -> str:
@@ -79,7 +76,10 @@ MANIFEST = {
     "version": "1.2.3",
     "displayName": "Demo App",
     "description": "Does the demo thing. Then it does several other things that belong on a detail page rather than in a list, at considerable length.",
-    "author": "kirocrew",
+    # Deliberately NOT a reserved name: a manifest may no longer assert one at
+    # all, so using "kirocrew" here would make every display-field test also a
+    # test of the reserved-name drop. That contract has its own tests below.
+    "author": "Demo Labs",
     "tags": ["dev", "demo"],
     "iconUrl": "/app-assets/demo-app/icon.svg",
     "heroImage": "/app-assets/demo-app/hero.svg",
@@ -188,20 +188,12 @@ def authored(name="demo-app", url="https://example.com/a.git", ref="main"):
 
 def test_bakes_generated_fields():
     findings = Findings()
-    # A first-party source, because the manifest claims the first-party author:
-    # `bake_entry` refuses that pairing on any other provenance, and this test is
-    # about deriving display fields, not about who may claim to be us.
-    entry = publish.bake_entry(
-        authored(url="https://github.com/kirodotdev/KiroCrewApp-Demo.git"),
-        MANIFEST,
-        "a" * 40,
-        findings,
-    )
+    entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings)
 
     assert entry["source"]["ref"] == "a" * 40, "the pin must be the resolved commit"
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
-    assert entry["author"] == {"name": "kirocrew"}
+    assert entry["author"] == {"name": "Demo Labs"}
     assert entry["tags"] == ["dev", "demo"]
     assert entry["version"] == "1.2.3"
     assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
@@ -594,20 +586,294 @@ def test_the_reserved_author_check_is_case_insensitive():
     assert findings.warnings
 
 
-def test_first_party_source_may_carry_the_first_party_author():
-    """Provenance, not the manifest, is what grants it -- and a curator-authored
-    source url under our org cannot be forged by a publisher's manifest."""
+def test_even_a_first_party_source_cannot_let_a_manifest_claim_our_name():
+    """The url is no longer consulted, and that is the point.
+
+    Trusting it required the url we CHECK and the repository git FETCHES to be
+    the same thing, and they are not: `https://github.com/kirodetdev/../x` style
+    dot segments satisfy a first-party prefix test while git normalizes them away
+    and fetches somewhere else. Rather than canonicalize a url in order to keep
+    honouring a claim made inside a file we do not control, the claim is not
+    honoured at all -- the curator states it on the entry instead.
+    """
     entry, findings = _bake(
         "https://github.com/kirodotdev/KiroCrewApp-Thing.git", "kirocrew"
     )
-    assert entry["author"] == {"name": "kirocrew"}
-    assert findings.warnings == []
+    assert "author" not in entry
+    assert any("reserved author" in w for w in findings.warnings)
+
+    bypass, _ = _bake("https://github.com/kirodotdev/../attacker/x.git", "kirocrew")
+    assert "author" not in bypass
+
+
+@pytest.mark.parametrize(
+    "claimed",
+    [
+        "\uff2b\uff49\uff52\uff4f\uff23\uff52\uff45\uff57",  # fullwidth KiroCrew
+        "kiro\u200bcrew",  # zero-width space
+        "kiro\u00adcrew",  # soft hyphen
+        "kiro  crew",  # doubled separator
+        "KiroCrew",
+    ],
+)
+def test_reserved_name_folding_resists_look_alikes(claimed):
+    """A name that READS as ours makes the claim, whatever bytes encode it.
+
+    casefold() alone catches only the last of these, which is why the fold
+    normalizes and strips format characters before the membership test.
+    """
+    entry, findings = _bake("https://github.com/acme-labs/their-app.git", claimed)
+    assert "author" not in entry, f"{claimed!r} reads as the reserved name"
+    assert findings.warnings
 
 
 def test_a_third_party_author_passes_through_untouched():
     entry, findings = _bake("https://github.com/acme-labs/their-app.git", "acme-labs")
     assert entry["author"] == {"name": "acme-labs"}
     assert findings.warnings == []
+
+
+# --------------------------------------------------------------------------
+# Nothing in an app.json may halt another app's release
+# --------------------------------------------------------------------------
+
+BUILTIN = {
+    "name": "demo-app",
+    "source": {
+        "type": "builtin",
+        "manifestFrom": {
+            "url": "https://github.com/kirodotdev/KiroCrew.git",
+            "ref": "b" * 40,
+            "subdir": "src/apps/builtins/demo_app",
+        },
+    },
+}
+
+
+@pytest.mark.parametrize("hostile", [5, [1], {"a": 1}, True])
+@pytest.mark.parametrize(
+    "field", ["displayName", "version", "description", "iconUrl", "heroImage"]
+)
+def test_a_non_string_display_field_degrades_instead_of_halting(field, hostile):
+    """The contract's central promise, and it is about the WHOLE run.
+
+    `bake_entry` raising means `publish()` propagates, so one hostile file in one
+    app's repository stops EVERY app's release. `(x or "").strip()` looks total
+    but is not: falsy values survive while a truthy non-string reaches `.strip()`
+    and raises AttributeError. Five fields have that shape, not the three that
+    are obvious -- iconUrl and heroImage are the easy ones to miss.
+    """
+    findings = Findings()
+    entry = publish.bake_entry(
+        authored(), {**MANIFEST, field: hostile}, "a" * 40, findings
+    )
+    # Still a publishable entry: identity survives, only the bad field is absent.
+    assert entry["name"] == "demo-app"
+    assert findings.errors == []
+
+
+def test_a_hostile_manifest_still_produces_a_schema_valid_document():
+    """End-to-end, because type-safety is not schema-safety.
+
+    A `kind` outside the enum and an over-long name are STRINGS, so a type filter
+    passes them through; they then fail validation on the assembled document,
+    which returns errors for the whole run. Only checking the published schema
+    catches that -- `bake_entry` alone cannot see it.
+    """
+    manifest = {
+        **MANIFEST,
+        "author": {"name": "x" * 200, "kind": "wizard", "url": "http://insecure"},
+        "displayName": {"nope": 1},
+        "version": ["1.0"],
+    }
+    findings = Findings()
+    doc = publish.build_registry(
+        {"schemaVersion": 1, "apps": [authored(url="https://example.com/a.git")]},
+        lambda url, ref: "a" * 40,
+        lambda url, c, subdir=None: manifest,
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        findings,
+    )
+    schema_findings = Findings()
+    publish.check_schema(
+        doc,
+        publish.SCHEMA_DIR / "official-registry.schema.json",
+        "official-registry.json",
+        schema_findings,
+    )
+    assert schema_findings.errors == [], (
+        f"a manifest we do not control halted the publish: {schema_findings.errors}"
+    )
+    assert "author" not in doc["apps"][0], "schema-illegal author must be dropped"
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        # Dropped unless independently schema-valid, field by field.
+        ({"name": "acme", "kind": "wizard"}, {"name": "acme"}),
+        ({"name": "acme", "url": "http://x"}, {"name": "acme"}),
+        ({"name": "acme", "url": 5}, {"name": "acme"}),
+        ({"name": "acme", "kind": "ORG"}, {"name": "acme", "kind": "org"}),
+        ({"name": " acme "}, {"name": "acme"}),
+        # An over-long name yields nothing rather than a prefix: truncating would
+        # publish an attribution to a DIFFERENT name than the one claimed.
+        ({"name": "x" * 81}, None),
+        ("x" * 81, None),
+    ],
+)
+def test_normalize_author_is_schema_total(value, expected):
+    assert publish.normalize_author(value) == expected
+
+
+# --------------------------------------------------------------------------
+# The builtin source type
+# --------------------------------------------------------------------------
+
+
+def test_builtin_publishes_no_fetch_coordinates():
+    """`manifestFrom` is publish-time only, like `note`.
+
+    Shipping it would hand a client a clone target for code it already has, which
+    is the duplication the type exists to make unrepresentable.
+    """
+    entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings())
+    assert entry["source"] == {"type": "builtin"}
+    assert "manifestFrom" not in entry["source"]
+    assert "ref" not in entry["source"], "there is no commit to pin: nothing is fetched"
+    assert "url" not in entry["source"]
+
+
+def test_builtin_still_derives_display_fields_from_the_manifest():
+    entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings())
+    assert entry["displayName"] == "Demo App"
+    assert entry["version"] == "1.2.3"
+    assert entry["summary"] == "Does the demo thing."
+
+
+def test_builtin_keeps_minclientversion_but_a_bare_source_is_fine():
+    pinned = {
+        **BUILTIN,
+        "source": {**BUILTIN["source"], "minClientVersion": "0.2.0-nightly.20260806"},
+    }
+    entry = publish.bake_entry(pinned, MANIFEST, "b" * 40, Findings())
+    assert entry["source"] == {
+        "type": "builtin",
+        "minClientVersion": "0.2.0-nightly.20260806",
+    }
+
+
+def test_builtin_reads_its_manifest_from_manifest_from_not_from_source():
+    """A builtin `source` has no url/ref at all, so a resolver reading `source`
+    would raise KeyError rather than fetch."""
+    seen: list[tuple[str, str, str | None]] = []
+
+    publish.build_registry(
+        {"schemaVersion": 1, "apps": [BUILTIN]},
+        lambda url, ref: "b" * 40,
+        lambda url, commit, subdir=None: seen.append((url, commit, subdir)) or MANIFEST,
+        datetime(2026, 1, 1, tzinfo=timezone.utc),
+        Findings(),
+    )
+    assert seen == [
+        (
+            "https://github.com/kirodotdev/KiroCrew.git",
+            "b" * 40,
+            "src/apps/builtins/demo_app",
+        )
+    ]
+
+
+def test_a_builtin_manifest_cannot_claim_the_reserved_author_either():
+    """The type is a string a curator types. It is not evidence of anything, and
+    trusting it was the first version of this bug."""
+    entry, findings = _bake_builtin("kirocrew")
+    assert "author" not in entry
+    assert any("reserved author" in w for w in findings.warnings)
+
+
+def test_a_curator_stated_author_is_how_a_builtin_gets_attributed():
+    entry, findings = _bake_builtin(
+        "kirocrew", curated={"name": "Kiro Crew", "kind": "org"}
+    )
+    assert entry["author"] == {"name": "Kiro Crew", "kind": "org"}
+    assert findings.warnings == []
+
+
+def _bake_builtin(manifest_author, curated=None):
+    authored_entry = dict(BUILTIN)
+    if curated is not None:
+        authored_entry["author"] = curated
+    findings = Findings()
+    entry = publish.bake_entry(
+        authored_entry,
+        {"name": "demo-app", "author": manifest_author},
+        "b" * 40,
+        findings,
+    )
+    return entry, findings
+
+
+# --------------------------------------------------------------------------
+# The repo cache
+# --------------------------------------------------------------------------
+
+
+def test_one_fetch_serves_every_subdir_of_the_same_commit(tmp_path, allow_local_urls):
+    """The reason the cache exists: 19 built-ins live in ONE monorepo, so a
+    per-call fetch would pull it 19 times to read 19 small files."""
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    git("init", "--quiet", "-b", "main", ".", cwd=repo)
+    for app in ("one", "two"):
+        d = repo / "apps" / app
+        d.mkdir(parents=True)
+        (d / "app.json").write_text(json.dumps({"name": f"app-{app}"}), encoding="utf-8")
+    git("add", "-A", cwd=repo)
+    git("commit", "--quiet", "-m", "init", cwd=repo)
+    commit = git("rev-parse", "HEAD", cwd=repo)
+
+    first = publish.fetched_repo(str(repo), commit)
+    assert publish.fetch_manifest(str(repo), commit, "apps/one")["name"] == "app-one"
+    assert publish.fetch_manifest(str(repo), commit, "apps/two")["name"] == "app-two"
+    assert publish.fetched_repo(str(repo), commit) is first, "refetched the same commit"
+
+
+def test_reset_is_total_even_when_a_cleanup_refuses(tmp_path, allow_local_urls):
+    """A cleanup that raises must not leave the cache half-emptied: a partial
+    reset reintroduces exactly the cross-test order dependence this prevents."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    publish.fetched_repo(str(repo), commit)
+
+    class Exploding:
+        def cleanup(self):
+            raise OSError("refuses")
+
+    publish._REPO_CACHE[("x", "y")] = (Path("/nonexistent"), Exploding())
+    publish.reset_repo_cache()
+    assert publish._REPO_CACHE == {}
+
+
+def test_a_reaped_checkout_is_evicted_rather_than_handed_back(tmp_path, allow_local_urls):
+    """Returning a vanished path would surface as `cannot read app.json` --
+    blaming the manifest for an infrastructure loss."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    checkout = publish.fetched_repo(str(repo), commit)
+    shutil.rmtree(checkout)
+
+    again = publish.fetched_repo(str(repo), commit)
+    assert again.exists() and again != checkout
+
+
+def test_the_original_error_survives_a_failing_cleanup(tmp_path, allow_local_urls, monkeypatch):
+    """`the ref moved during publish` is the diagnosis; an rmtree failure is not.
+    A cleanup that raises inside the handler would REPLACE it."""
+    repo = tmp_path / "repo"
+    make_repo(repo, MANIFEST)
+    with pytest.raises(publish.PublishError, match="ref moved during publish"):
+        publish.fetched_repo(str(repo), "c" * 40)
 
 
 def test_the_real_launchdarkly_app_is_publishable_but_unattributed():
@@ -729,7 +995,7 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
     assert entry["source"]["ref"] == commit, "must be pinned to the resolved commit"
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
-    assert entry["author"] == {"name": "kirocrew"}
+    assert entry["author"] == {"name": "Demo Labs"}
     assert registry["revision"].endswith(
         publish.content_digest(
             {"apps": registry["apps"], "removed": [], "reinstated": []}

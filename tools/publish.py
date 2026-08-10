@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import contextlib
 import hashlib
 import hmac
 import json
@@ -40,6 +41,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import unicodedata
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -56,13 +58,14 @@ from verify_dist import load_public_keys  # noqa: E402
 SUMMARY_MAX = 200
 TAGS_MAX = 16
 
-# Author names that assert the catalog operator itself. Only an app whose source
-# is under FIRST_PARTY_URL_PREFIX may carry one -- see bake_entry. casefold()ed,
-# because `KiroCrew` and `kirocrew` make the same claim to a reader.
+# Author names that assert the catalog operator itself. A manifest may never
+# carry one: it is a file we do not control, and no evidence inside it can
+# support the claim (see bake_entry). Only the curator may state these, on the
+# catalog entry. casefold()ed, because `KiroCrew` and `kirocrew` make the same
+# claim to a reader.
 RESERVED_AUTHORS = frozenset(
     {"kirocrew", "kiro crew", "kiro", "kirodotdev", "kiro.dev", "crew.kiro.dev"}
 )
-FIRST_PARTY_URL_PREFIX = "https://github.com/kirodotdev/"
 COMMIT_RE = re.compile(r"^[a-f0-9]{40}$|^[a-f0-9]{64}$")
 HTTPS_RE = re.compile(r"^https://[^\s\x00]+$")
 
@@ -167,17 +170,54 @@ def resolve_commit(url: str, ref: str) -> str:
     return next(iter(candidates.values()))
 
 
-def fetch_manifest(url: str, commit: str, subdir: str | None = None) -> dict[str, Any]:
-    """Read ``app.json`` from a repository at an exact commit.
+# Checkouts kept for the process, keyed by the exact bytes they contain. Every
+# built-in app lives in one monorepo, so a per-call fetch would pull the same
+# few hundred megabytes once per entry to read a few kilobytes of manifest.
+# The TemporaryDirectory is stored WITH its path: two parallel structures let an
+# eviction drop the only reachable path while leaving the handle referenced.
+_REPO_CACHE: dict[tuple[str, str], tuple[Path, Any]] = {}
 
-    Clones shallowly and then verifies HEAD is the commit we resolved. That
-    check is the point: resolve-then-clone is two round trips, and without it a
+
+def reset_repo_cache() -> None:
+    """Release every cached checkout.
+
+    Total by construction: a ``cleanup()`` that refuses must not leave the rest
+    of the cache populated, because a half-reset cache reintroduces exactly the
+    cross-caller order dependence this function exists to remove.
+    """
+    while _REPO_CACHE:
+        _, tmpdir = _REPO_CACHE.popitem()[1]
+        with contextlib.suppress(Exception):
+            tmpdir.cleanup()
+
+
+def fetched_repo(url: str, commit: str) -> Path:
+    """Shallow-fetch a repository at an exact commit. Cached per (url, commit).
+
+    Fetches shallowly and then verifies HEAD is the commit we resolved. That
+    check is the point: resolve-then-fetch is two round trips, and without it a
     ref that moves in between would silently publish different bytes than the
     ones the commit id claims.
     """
     require_https(url)
-    with tempfile.TemporaryDirectory(prefix="kcapps-publish-") as tmp:
-        repo = Path(tmp) / "fetched"
+    if hit := _REPO_CACHE.get((url, commit)):
+        repo, _ = hit
+        if repo.exists():
+            return repo
+        # Reaped underneath us. Evict rather than return a path whose absence
+        # would surface downstream as "cannot read app.json" -- blaming the
+        # manifest for an infrastructure loss.
+        _, stale = _REPO_CACHE.pop((url, commit))
+        with contextlib.suppress(Exception):
+            stale.cleanup()
+
+    # Held for the process rather than by a `with` block, because later entries
+    # read from this same checkout. Released on eviction above, on any failure
+    # below, or by reset_repo_cache().
+    tmpdir = tempfile.TemporaryDirectory(prefix="kcapps-publish-")
+    try:
+        tmp = Path(tmpdir.name)
+        repo = tmp / "fetched"
         try:
             # Fetching the commit directly is exact, but needs the server to
             # allow SHA1-in-want; fall back to a shallow clone below.
@@ -188,7 +228,7 @@ def fetch_manifest(url: str, commit: str, subdir: str | None = None) -> dict[str
         except PublishError:
             # A separate directory: `init` above already populated the first one,
             # and git refuses to clone into a non-empty destination.
-            repo = Path(tmp) / "cloned"
+            repo = tmp / "cloned"
             run_git(["clone", "--depth", "1", "--quiet", url, str(repo)])
             head = run_git(["rev-parse", "HEAD"], cwd=repo).strip()
 
@@ -203,12 +243,26 @@ def fetch_manifest(url: str, commit: str, subdir: str | None = None) -> dict[str
         kind = run_git(["cat-file", "-t", head], cwd=repo).strip()
         if kind != "commit":
             raise PublishError(f"{url}: {commit} is a {kind}, not a commit")
+    except BaseException:
+        # A cleanup that raises here must not REPLACE the error that caused it:
+        # "the ref moved during publish" is the diagnosis, an rmtree failure is
+        # not. A leaked directory is worse-but-visible; a lost error is not.
+        with contextlib.suppress(Exception):
+            tmpdir.cleanup()
+        raise
 
-        rel = Path(subdir) / "app.json" if subdir else Path("app.json")
-        try:
-            raw = run_git(["show", f"{head}:{rel.as_posix()}"], cwd=repo)
-        except PublishError as exc:
-            raise PublishError(f"{url}: cannot read {rel.as_posix()} at {commit}: {exc}")
+    _REPO_CACHE[(url, commit)] = (repo, tmpdir)
+    return repo
+
+
+def fetch_manifest(url: str, commit: str, subdir: str | None = None) -> dict[str, Any]:
+    """Read ``app.json`` from a repository at an exact commit."""
+    repo = fetched_repo(url, commit)
+    rel = Path(subdir) / "app.json" if subdir else Path("app.json")
+    try:
+        raw = run_git(["show", f"{commit}:{rel.as_posix()}"], cwd=repo)
+    except PublishError as exc:
+        raise PublishError(f"{url}: cannot read {rel.as_posix()} at {commit}: {exc}")
 
     try:
         manifest = json.loads(raw)
@@ -219,15 +273,32 @@ def fetch_manifest(url: str, commit: str, subdir: str | None = None) -> dict[str
     return manifest
 
 
-def derive_summary(description: str, findings: Findings, app: str) -> str | None:
+def manifest_str(manifest: dict[str, Any], key: str) -> str:
+    """Read a manifest field as a string, or "" for anything that is not one.
+
+    Every display field comes from an ``app.json`` we do not control, so a
+    hostile or merely sloppy value must DEGRADE that one field -- never raise.
+    `(manifest.get(k) or "").strip()` looks total but is not: `None`/`0`/`""`
+    are falsy and survive, while a truthy non-string (`5`, `[1]`, `{"a": 1}`)
+    reaches `.strip()` and raises AttributeError, which halts the whole run and
+    with it every OTHER app's release.
+    """
+    value = manifest.get(key)
+    return value.strip() if isinstance(value, str) else ""
+
+
+def derive_summary(description: Any, findings: Findings, app: str) -> str | None:
     """Reduce a manifest description to one list-safe line.
 
     `description` is detail-view body copy and routinely runs past 400
     characters, so it is not a summary. Taking the first sentence produces real
     list copy rather than a sentence severed mid-clause; only a first sentence
     that is itself over-long gets truncated, and that is reported.
+
+    Takes `Any` deliberately: the value arrives from a manifest, so a non-string
+    is input to handle, not a caller bug to raise on.
     """
-    text = " ".join((description or "").split())
+    text = " ".join(description.split()) if isinstance(description, str) else ""
     if not text:
         return None
 
@@ -243,20 +314,59 @@ def derive_summary(description: str, findings: Findings, app: str) -> str | None
     return summary
 
 
+_AUTHOR_KINDS = frozenset({"person", "org"})
+_AUTHOR_NAME_MAX = 80  # tracks author.name maxLength in BOTH schemas
+
+
+def fold_author_name(name: str) -> str:
+    """Fold a claimed author name to what a READER would take it to say.
+
+    `casefold()` alone folds case and nothing else, so it compares bytes where
+    the question is about appearance: `ＫｉｒｏＣｒｅｗ` (fullwidth) and
+    `kiro\u200bcrew` (zero-width space) both read as ours and both miss a
+    casefold-only membership test. NFKC maps the compatibility forms onto their
+    ASCII equivalents, dropping format characters (category Cf, which is what
+    ZWSP/ZWNJ/soft-hyphen are) removes the invisible separators NFKC keeps, and
+    collapsing whitespace closes `kiro  crew`.
+    """
+    folded = unicodedata.normalize("NFKC", name)
+    folded = "".join(ch for ch in folded if unicodedata.category(ch) != "Cf")
+    return " ".join(folded.split()).casefold()
+
+
 def normalize_author(value: Any) -> dict[str, Any] | None:
-    """Widen a bare author string into the structured form.
+    """Widen a bare author string into the structured, schema-valid form.
 
     Manifests in the wild carry `"author": "kirocrew"`. The published shape is an
     object so it can carry a link and distinguish a person from an org, and the
     bare string stays valid input precisely so no manifest has to change first.
+
+    Every field is dropped unless it is INDEPENDENTLY valid against the published
+    schema, not merely a string. Type-safe is not schema-safe: `kind: "wizard"`,
+    `url: "http://x"` and an 81-character name are all strings, so they survive a
+    type filter, then fail validation on the ASSEMBLED document -- which returns
+    errors for the whole run and halts every other app's release. An over-long
+    name yields None rather than a truncation, because publishing a prefix would
+    attribute the app to a different name than the one claimed.
     """
     if isinstance(value, str):
         name = value.strip()
-        return {"name": name} if name else None
-    if isinstance(value, dict):
-        out = {k: v for k, v in value.items() if k in ("name", "url", "kind") and v}
-        return out if out.get("name") else None
-    return None
+        return {"name": name} if 0 < len(name) <= _AUTHOR_NAME_MAX else None
+    if not isinstance(value, dict):
+        return None
+
+    name = value.get("name")
+    if not isinstance(name, str) or not (0 < len(name.strip()) <= _AUTHOR_NAME_MAX):
+        return None
+    out: dict[str, Any] = {"name": name.strip()}
+
+    url = value.get("url")
+    if isinstance(url, str) and HTTPS_RE.match(url.strip()):
+        out["url"] = url.strip()
+    kind = value.get("kind")
+    if isinstance(kind, str) and kind.strip().casefold() in _AUTHOR_KINDS:
+        out["kind"] = kind.strip().casefold()
+    return out
 
 
 def bake_entry(
@@ -276,7 +386,15 @@ def bake_entry(
         )
 
     source = dict(authored["source"])
-    source["ref"] = commit
+    if source.get("type") == "builtin":
+        # A built-in resolves from the client's OWN inventory, so the published
+        # entry carries no fetch coordinates at all: `manifestFrom` exists only
+        # so publish can read display fields, and shipping it would hand clients
+        # a clone target for code they already have. Same curator-only-then-
+        # stripped pattern as `note`.
+        source.pop("manifestFrom", None)
+    else:
+        source["ref"] = commit
 
     entry: dict[str, Any] = {"name": name, "source": source}
 
@@ -285,9 +403,9 @@ def bake_entry(
     if categories := authored.get("categories"):
         entry["categories"] = list(categories)
 
-    if display := (manifest.get("displayName") or "").strip():
+    if display := manifest_str(manifest, "displayName"):
         entry["displayName"] = display[:60]
-    if summary := derive_summary(manifest.get("description", ""), findings, name):
+    if summary := derive_summary(manifest.get("description"), findings, name):
         entry["summary"] = summary
     # Attribution is the one display field the curator may state, because it is
     # the one that is an ASSERTION rather than a description. This document is
@@ -295,27 +413,38 @@ def bake_entry(
     # state -- not what the app's own file claims about itself.
     if curated := normalize_author(authored.get("author")):
         entry["author"] = curated
+    elif authored.get("author") is not None:
+        # Stated but unusable. Warn rather than silently falling through to the
+        # manifest: a curator who wrote an author meant to override the file, and
+        # degrading back to it would hand attribution to the untrusted side.
+        findings.warn(
+            f"{name}: catalog entry states an author that is not publishable "
+            f"({authored['author']!r}); publishing it with no author"
+        )
     elif author := normalize_author(manifest.get("author")):
-        # Falling back to the publisher's self-claim. Harmless for an ordinary
-        # name, but a manifest asserting OUR name is a trust claim it cannot be
-        # allowed to make on its own, so honour it only on first-party
-        # provenance -- the source url the curator wrote, which is also where the
-        # code actually comes from and which a manifest cannot forge.
-        claimed = author["name"].strip().casefold()
-        url = (authored.get("source") or {}).get("url") or ""
-        if claimed in RESERVED_AUTHORS and not url.startswith(FIRST_PARTY_URL_PREFIX):
+        # Falling back to the publisher's self-claim, which is fine for an
+        # ordinary name. A claim to OUR name is not a description but a trust
+        # assertion, and no evidence inside a file we do not control can support
+        # it -- not the source url (which normalizes: `.../kirodotdev/../x` passes
+        # a prefix test and fetches something else), not the `type` field, not the
+        # name itself (`ＫｉｒｏＣｒｅｗ` and `kiro\u200bcrew` read as ours and
+        # fold to neither). So the file may never assert it, at all.
+        if fold_author_name(author["name"]) in RESERVED_AUTHORS:
             # DROP the claim, do not fail the publish. Refusing the whole run
             # would let any publisher halt every release -- including other
-            # apps' -- by writing our name in a file we do not control. State the
-            # author in the catalog entry to publish attribution anyway.
+            # apps' -- by writing our name in a file we do not control.
             findings.warn(
-                f"{name}: manifest claims the reserved author {author['name']!r} "
-                f"but its source {url!r} is not under {FIRST_PARTY_URL_PREFIX}; "
-                f"publishing it with no author. Set `author` on the catalog entry "
-                f"to state the attribution yourself."
+                f"{name}: manifest claims the reserved author {author['name']!r}; "
+                f"a manifest cannot assert it, so this publishes with no author. "
+                f"Set `author` on the catalog entry to state the attribution."
             )
         else:
             entry["author"] = author
+    elif manifest.get("author") is not None:
+        findings.warn(
+            f"{name}: manifest author {manifest['author']!r} is not publishable; "
+            f"publishing it with no author"
+        )
 
     tags = [t.strip() for t in manifest.get("tags") or [] if isinstance(t, str) and t.strip()]
     if tags:
@@ -329,11 +458,11 @@ def bake_entry(
     if aliases:
         entry["searchAliases"] = aliases[:TAGS_MAX]
 
-    if version := (manifest.get("version") or "").strip():
+    if version := manifest_str(manifest, "version"):
         entry["version"] = version[:64]
-    if icon := (manifest.get("iconUrl") or "").strip():
+    if icon := manifest_str(manifest, "iconUrl"):
         entry["iconRef"] = icon
-    if hero := (manifest.get("heroImage") or "").strip():
+    if hero := manifest_str(manifest, "heroImage"):
         entry["heroRef"] = hero
 
     return entry
@@ -364,8 +493,12 @@ def build_registry(
     apps: list[dict[str, Any]] = []
     for authored_entry in authored.get("apps") or []:
         source = authored_entry["source"]
-        commit = resolver(source["url"], source["ref"])
-        manifest = fetcher(source["url"], commit, source.get("subdir"))
+        # A built-in has no fetch coordinates of its own -- it resolves from the
+        # client's inventory -- so the manifest is read from the repository the
+        # curator names in `manifestFrom`, which never reaches the published doc.
+        origin = source["manifestFrom"] if source.get("type") == "builtin" else source
+        commit = resolver(origin["url"], origin["ref"])
+        manifest = fetcher(origin["url"], commit, origin.get("subdir"))
         apps.append(bake_entry(authored_entry, manifest, commit, findings))
 
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
