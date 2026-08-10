@@ -86,7 +86,52 @@
 
     "authoredSource": {
       "type": "object",
-      "oneOf": [{ "$ref": "#/$defs/authoredSourceGit" }]
+      "oneOf": [
+        { "$ref": "#/$defs/authoredSourceGit" },
+        { "$ref": "#/$defs/authoredSourceBuiltin" }
+      ]
+    },
+
+    "authoredSourceBuiltin": {
+      "title": "builtin -- ships inside the client, nothing to fetch",
+      "description": "An app bundled in the KiroCrew application itself. `source` answers where the BYTES come from, and for a built-in they come from the release the user already installed -- so this variant carries no fetch coordinates and the published entry carries none either. Typing it `git` instead would be a description of where the source code is kept, which is a different question, and would tell a client to clone a few hundred megabytes to obtain a second copy of code already on disk. Listing built-ins here is what decouples the store's shelf from the client's release cadence.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "manifestFrom"],
+      "properties": {
+        "type": { "const": "builtin" },
+        "manifestFrom": {
+          "description": "Where publish READS the app's app.json to generate display fields. Publish-time only: stripped at bake, exactly like `note`, because shipping it would hand clients a clone target for code they already have. It is not a trust anchor -- nothing a manifest says about who wrote it is honoured on the strength of this url.",
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "ref"],
+          "properties": {
+            "url": {
+              "type": "string",
+              "pattern": "^https://[^\\u0000\\s]+$",
+              "maxLength": 2048
+            },
+            "ref": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 255,
+              "pattern": "^[^\\u0000\\s]+$"
+            },
+            "subdir": {
+              "type": "string",
+              "pattern": "^(?!/)(?!.*\\.\\.)(?!.*\\\\)[^\\u0000]+$",
+              "minLength": 1,
+              "maxLength": 256
+            }
+          }
+        },
+        "minClientVersion": {
+          "description": "The earliest KiroCrew release that carries this app. Lets the store list a built-in the running client does not have yet and say so, instead of offering an install it cannot perform. Full semver, so a prerelease (0.2.0-nightly.20260806t065257, 0.2.0-rc.1) is statable -- those are real shipping versions, and a release-only pattern would make the earliest carrying release unnameable for anything that first shipped on a nightly.",
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        }
+      }
     },
 
     "authoredSourceGit": {

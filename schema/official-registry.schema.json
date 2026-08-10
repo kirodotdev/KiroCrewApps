@@ -124,11 +124,29 @@
       "type": "object",
       "oneOf": [
         { "$ref": "#/$defs/sourceGit" },
+        { "$ref": "#/$defs/sourceBuiltin" },
         { "$ref": "#/$defs/sourceArchive" },
         { "$ref": "#/$defs/sourceS3" },
         { "$ref": "#/$defs/sourceOci" },
         { "$ref": "#/$defs/sourceBundle" }
       ]
+    },
+
+    "sourceBuiltin": {
+      "title": "builtin -- resolved from the client's own inventory",
+      "description": "An app bundled in the KiroCrew release the user already installed. There is deliberately NOTHING to fetch here and no digest: integrity comes from the signed application bundle, so a url or hash would be a second, weaker claim about bytes this document does not deliver. Additional properties are closed, which makes an entry carrying a clone target unrepresentable rather than merely discouraged. IMPORTANT for clients: this is a CLAIM in a fetched document, not an authorization. Resolve a built-in from your own inventory and never let a catalog entry designate one, or an entry naming an app you ship could shadow or impersonate it.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "const": "builtin" },
+        "minClientVersion": {
+          "description": "The earliest KiroCrew release carrying this app, when known. A client older than this can still LIST the app and tell the user to update, which is the point: the shelf stops being pinned to the client's release cadence. Full semver, because prereleases (0.2.0-nightly.20260806t065257, 0.2.0-rc.1) are real shipping versions; anchored at both ends, because an unanchored pattern accepts a trailing payload that then renders in a signed document.",
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        }
+      }
     },
 
     "sourceGit": {
