@@ -95,7 +95,20 @@
           "maxItems": 16
         },
         "version": { "type": "string", "maxLength": 64 },
-        "iconRef": { "type": "string" },
+        "iconRef": {
+          "description": "Path to the app's icon, never a URL. A builtin names an absolute client-local path (/app-assets/<app>/icon.svg) whose bytes it already ships; every other source names a repo-relative path the client rewrites onto its own proxy. Honouring an absolute location from a fetched manifest would put a publisher-chosen host into a document we sign.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+        },
+        "iconRefDark": {
+          "description": "Optional dark-appearance variant of iconRef, same shape rules. Raster art has fixed bytes, so an app that must read well on both backgrounds ships two files; a builtin's inline SVG repaints from theme tokens and needs none.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+        },
         "heroRef": { "type": "string" }
       }
     },

@@ -196,8 +196,124 @@ def test_bakes_generated_fields():
     assert entry["author"] == {"name": "Demo Labs"}
     assert entry["tags"] == ["dev", "demo"]
     assert entry["version"] == "1.2.3"
-    assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
+    # MANIFEST names its icon with an ABSOLUTE `iconUrl`, which only a builtin
+    # may do. This entry is a git source, so the icon is read from `iconPath`
+    # (absent here) -- and because the publisher clearly meant to ship an icon,
+    # the run says which key this source type reads instead of going quiet.
+    # `heroRef` still reads `heroImage` unconditionally: that field has not been
+    # through this treatment yet.
+    assert "iconRef" not in entry
+    assert any("reads iconPath" in w for w in findings.warnings)
     assert entry["heroRef"] == "/app-assets/demo-app/hero.svg"
+
+
+class TestBakesIconRefs:
+    """Which manifest key an icon is read from depends on the SOURCE TYPE.
+
+    A builtin resolves from the client's own inventory, so it names an absolute
+    client-local path whose bytes it already ships. Everything else is fetched
+    from a repository we do not control, so only a repo-relative path is read --
+    the client rewrites that onto its own proxy, which is what keeps the
+    extension allowlist and the trusted-host gate in the fetch path.
+    """
+
+    def test_builtin_reads_the_absolute_icon_url(self):
+        findings = Findings()
+        entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, findings)
+        assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
+        assert findings.warnings == []
+
+    def test_builtin_dark_variant_is_published(self):
+        manifest = {**MANIFEST, "iconUrlDark": "/app-assets/demo-app/icon-dark.svg"}
+        entry = publish.bake_entry(BUILTIN, manifest, "b" * 40, Findings())
+        assert entry["iconRefDark"] == "/app-assets/demo-app/icon-dark.svg"
+
+    def test_git_reads_the_repo_relative_icon_path(self):
+        """The bug this closes: a fetched app declares `iconPath`, so reading
+        only `iconUrl` published NO icon for every third-party entry."""
+        findings = Findings()
+        manifest = {**MANIFEST, "iconPath": "assets/icon.png"}
+        del manifest["iconUrl"]
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert entry["iconRef"] == "assets/icon.png"
+        assert findings.warnings == []
+
+    def test_git_dark_variant_is_published(self):
+        manifest = {**MANIFEST, "iconPathDark": "assets/icon-dark.png"}
+        del manifest["iconUrl"]
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings())
+        assert entry["iconRefDark"] == "assets/icon-dark.png"
+
+    def test_absent_icon_publishes_no_key(self):
+        """Absence must not publish an empty string: a falsy ref would still be
+        a key the client has to special-case, and it widens every entry."""
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings())
+        assert "iconRef" not in entry
+        assert "iconRefDark" not in entry
+
+    def test_truly_iconless_app_warns_about_nothing(self):
+        """The wrong-key warning must not fire for an app that simply has no
+        icon, or every such app would carry a spurious finding."""
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert not any("icon" in w.lower() for w in findings.warnings)
+
+    def test_wrong_key_for_the_source_type_is_named(self):
+        """A publisher who used the other source type's key gets told which key
+        this one reads. Silence would read as "the catalog dropped my icon"."""
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "assets/i.png"
+        publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
+        assert any("reads iconUrl" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://evil.example/track.png",
+            "http://evil.example/track.png",
+            "//evil.example/track.png",
+            "javascript:alert(1)",
+            "data:image/svg+xml;base64,AAAA",
+            "/etc/passwd",
+            "../../etc/passwd",
+            "assets/../../etc/passwd",
+            "assets/icon.png?ref=track",
+            "assets/ icon.png",
+        ],
+    )
+    def test_fetched_manifest_may_not_name_an_absolute_or_escaping_location(self, value):
+        """A fetched manifest is untrusted content. Publishing an absolute value
+        out of it would put a publisher-chosen host into a document WE sign, and
+        the store would then load it."""
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(), {**MANIFEST, "iconPath": value}, "a" * 40, findings
+        )
+        assert "iconRef" not in entry, value
+        assert findings.errors == [], "one bad icon must not halt the release"
+        assert any("iconPath" in w for w in findings.warnings)
+
+    def test_builtin_relative_icon_is_refused(self):
+        """The asymmetry runs both ways: a builtin's ref is resolved by the
+        client against its own served root, so a relative value would silently
+        resolve somewhere else entirely."""
+        findings = Findings()
+        manifest = {**MANIFEST, "iconUrl": "assets/icon.png"}
+        entry = publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
+        assert "iconRef" not in entry
+        assert any("absolute client-local path" in w for w in findings.warnings)
+
+    def test_non_string_icon_degrades_without_raising(self):
+        """Same totality rule as every other display field: nothing read from an
+        app.json may halt the run."""
+        entry = publish.bake_entry(
+            authored(), {**MANIFEST, "iconPath": {"nope": 1}}, "a" * 40, Findings()
+        )
+        assert "iconRef" not in entry
+
 
 
 def test_bake_rejects_name_disagreement():

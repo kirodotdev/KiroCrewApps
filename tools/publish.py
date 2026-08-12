@@ -369,6 +369,68 @@ def normalize_author(value: Any) -> dict[str, Any] | None:
     return out
 
 
+#: A published asset ref is a PATH, never a URL. Rejects a scheme (`https:`,
+#: `data:`, `javascript:`), a protocol-relative `//host`, a `..` segment, a
+#: backslash, and anything outside a conservative path charset.
+_ASSET_REF_RE = re.compile(r"^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./-]+$")
+
+
+def bake_asset_ref(
+    manifest: dict[str, Any],
+    source_type: str,
+    abs_key: str,
+    rel_key: str,
+    findings: Findings,
+    app: str,
+) -> str | None:
+    """Read one display asset off a manifest, per what its source type may say.
+
+    A built-in resolves from the client's OWN inventory, so its manifest names
+    an absolute client-local path (`/app-assets/<app>/icon.svg`) that the client
+    already ships the bytes for. Everything else is fetched from a repository we
+    do not control, so only a REPO-RELATIVE path is read: the client rewrites it
+    onto its own proxy, which is what keeps the extension allowlist and the
+    trusted-host gate in the fetch path.
+
+    The asymmetry is the point. Honouring an absolute value from a third-party
+    manifest would let that publisher put any host it likes into a document WE
+    sign, and the store would then load it — a tracking pixel at minimum, and a
+    `javascript:`/`data:` ref at worst, depending on where a client interpolates
+    it. So an absolute value from a non-builtin, or a relative value from a
+    builtin, is DROPPED with a warning rather than published: half a display
+    field costs a card its icon, while a signed bad ref costs more than that.
+    """
+    key = abs_key if source_type == "builtin" else rel_key
+    other = rel_key if source_type == "builtin" else abs_key
+    value = manifest_str(manifest, key)
+    if not value:
+        # The publisher named the asset under the key for the OTHER source type.
+        # Silence here would ship a card with no icon and no diagnostic, which
+        # reads as "the catalog dropped my icon" rather than "I used the wrong
+        # key", so say which key this source type reads.
+        if manifest_str(manifest, other):
+            findings.warn(
+                f"{app}: declares {other} but a {source_type or 'non-builtin'} source "
+                f"reads {key}; publishing without it"
+            )
+        return None
+    absolute = value.startswith("/")
+    if source_type == "builtin":
+        if not absolute or not _ASSET_REF_RE.match(value.lstrip("/")):
+            findings.warn(
+                f"{app}: builtin {key} {value!r} is not an absolute client-local "
+                f"path; publishing without it"
+            )
+            return None
+    elif absolute or not _ASSET_REF_RE.match(value):
+        findings.warn(
+            f"{app}: {key} {value!r} is not a repo-relative path; publishing "
+            f"without it. A fetched manifest may not name an absolute location."
+        )
+        return None
+    return value
+
+
 def bake_entry(
     authored: dict[str, Any],
     manifest: dict[str, Any],
@@ -460,8 +522,20 @@ def bake_entry(
 
     if version := manifest_str(manifest, "version"):
         entry["version"] = version[:64]
-    if icon := manifest_str(manifest, "iconUrl"):
+
+    source_type = str(source.get("type") or "")
+    # `iconPath` is the key a fetched app declares; `iconUrl` is the absolute
+    # client-local path a builtin declares. Reading the wrong one per source type
+    # is why third-party entries used to publish no icon at all.
+    if icon := bake_asset_ref(manifest, source_type, "iconUrl", "iconPath", findings, name):
         entry["iconRef"] = icon
+    # Optional dark-appearance variant. Raster art has fixed bytes, so an app
+    # that must read well on both backgrounds ships two files; a builtin's
+    # themeable inline SVG repaints from tokens and needs none.
+    if dark := bake_asset_ref(
+        manifest, source_type, "iconUrlDark", "iconPathDark", findings, name
+    ):
+        entry["iconRefDark"] = dark
     if hero := manifest_str(manifest, "heroImage"):
         entry["heroRef"] = hero
 

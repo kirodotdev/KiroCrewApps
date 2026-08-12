@@ -818,3 +818,54 @@ def test_published_builtin_cannot_carry_a_fetch_target(extra):
     to publish to remember to strip. `manifestFrom` is in this list because
     leaking it is the specific regression the strip prevents."""
     assert published_errors_for(published_builtin(**extra)) != []
+
+
+# ---------------------------------------------------------------------------
+# Published icon refs are PATHS, not URLs
+# ---------------------------------------------------------------------------
+#
+# `iconRef` used to be a bare `{"type": "string"}`, so an empty value or a full
+# `https://` URL validated. That mattered because the value is read from a
+# manifest we fetch from a repository we do not control: an unconstrained field
+# let a publisher put a host of their choosing into a document WE sign, and the
+# store would then load it. `tools/publish.py` refuses such a value before
+# baking; the schema is the second, independent gate.
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "/app-assets/demo-app/icon.svg",  # a builtin's absolute client-local path
+        "assets/icon.png",  # a fetched app's repo-relative path
+        "a/b/c-d_e.png",
+    ],
+)
+def test_published_schema_accepts_both_icon_ref_shapes(ref):
+    assert published_errors_for({**published_builtin(), "iconRef": ref}) == []
+    assert published_errors_for({**published_builtin(), "iconRefDark": ref}) == []
+
+
+@pytest.mark.parametrize(
+    "ref",
+    [
+        "https://evil.example/track.png",
+        "http://evil.example/track.png",
+        "//evil.example/track.png",
+        "javascript:alert(1)",
+        "data:image/svg+xml;base64,AAAA",
+        "../../etc/passwd",
+        "assets/../../etc/passwd",
+        "assets/icon.png?ref=track",
+        "assets/ icon.png",
+        "assets/icon.png\nX",
+        "",
+    ],
+)
+def test_published_schema_rejects_a_url_or_escaping_icon_ref(ref):
+    assert published_errors_for({**published_builtin(), "iconRef": ref}) != [], ref
+    assert published_errors_for({**published_builtin(), "iconRefDark": ref}) != [], ref
+
+
+def test_published_icon_refs_are_optional():
+    """Most apps ship one icon and no dark variant; neither key is required."""
+    assert published_errors_for(published_builtin()) == []
