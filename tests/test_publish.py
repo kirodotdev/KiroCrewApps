@@ -1405,3 +1405,120 @@ def test_verify_dist_is_quiet_when_there_is_no_registry(tmp_path):
 
     (tmp_path / "empty").mkdir()
     assert verify_hosted_icons(tmp_path / "empty") == []
+
+
+# ---------------------------------------------------------------------------
+# publish and the schema must enforce the SAME asset-ref rule
+# ---------------------------------------------------------------------------
+#
+# A value publish accepts and the schema rejects does not degrade one field: it
+# reaches check_schema on the ASSEMBLED document, and those errors withhold the
+# ENTIRE catalog publish. So one app's odd icon path would block every other
+# app's release -- the opposite of the totality rule every other baked field
+# follows. Pinning the two together is the fix; patching individual cases is not.
+
+
+def test_publish_and_schema_agree_on_the_asset_ref_rule():
+    schema = json.loads(
+        (publish.SCHEMA_DIR / "official-registry.schema.json").read_text(encoding="utf-8")
+    )
+    props = schema["$defs"]["entry"]["properties"]
+    for field in ("iconRef", "iconRefDark"):
+        assert props[field]["pattern"] == publish.ASSET_REF_PATTERN, field
+        assert props[field]["maxLength"] == publish.ASSET_REF_MAX, field
+
+
+class TestAssetRefRuleMatchesTheSchema:
+    """Values that pass publish must also pass the published schema."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "//app-assets/x.svg",  # looks absolute, is protocol-relative
+            "///app-assets/x.svg",
+            "/" + "a" * publish.ASSET_REF_MAX + ".svg",  # over maxLength
+        ],
+    )
+    def test_builtin_refs_the_schema_would_reject_are_refused(self, value):
+        findings = Findings()
+        entry = publish.bake_entry(
+            BUILTIN, {**MANIFEST, "iconUrl": value}, "b" * 40, findings
+        )
+        assert "iconRef" not in entry, value
+        assert findings.errors == [], "one odd path must not halt the run"
+        assert any("iconUrl" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize(
+        "value",
+        ["a" * (publish.ASSET_REF_MAX + 1) + ".png", "assets/" + "b" * 600 + ".png"],
+    )
+    def test_over_long_fetched_refs_are_refused(self, value):
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = value
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert "iconRef" not in entry
+        assert findings.errors == []
+
+    def test_every_accepted_ref_validates_against_the_published_schema(self):
+        """The property that matters, checked end to end rather than by eye: bake
+        a builtin and a fetched entry with the longest legal refs and run the real
+        published-schema validator over the assembled document."""
+        from validate import Findings as VFindings
+        from validate import check_schema
+
+        longest_abs = "/" + "a" * (publish.ASSET_REF_MAX - 1)
+        longest_rel = "a" * publish.ASSET_REF_MAX
+        builtin = publish.bake_entry(
+            BUILTIN, {**MANIFEST, "iconUrl": longest_abs}, "b" * 40, Findings()
+        )
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = longest_rel
+        fetched = publish.bake_entry(authored(), manifest, "a" * 40, Findings())
+        assert builtin["iconRef"] == longest_abs
+        assert fetched["iconRef"] == longest_rel
+
+        vf = VFindings()
+        check_schema(
+            {
+                "schemaVersion": 1,
+                "generatedAt": "2026-01-01T00:00:00Z",
+                "revision": "2026-01-01T00:00:00Z-abcdef1",
+                "apps": [builtin, {**fetched, "source": {"type": "builtin"}}],
+            },
+            publish.SCHEMA_DIR / "official-registry.schema.json",
+            "official-registry.json",
+            vf,
+        )
+        assert vf.errors == [], vf.errors
+
+
+# ---------------------------------------------------------------------------
+# Hosted icons must be uploaded with an image content type
+# ---------------------------------------------------------------------------
+#
+# `aws s3 sync --content-type` applies ONE value to every object a call uploads.
+# The document sync forces application/json, so an icon riding along in that call
+# reaches clients as JSON and an <img> refuses to render it. The fix is a
+# separate pass per extension, which only holds while the two lists agree.
+
+
+def test_asset_upload_covers_every_extension_publish_will_host():
+    script = (
+        publish.ROOT / ".github" / "scripts" / "upload-assets.sh"
+    ).read_text(encoding="utf-8")
+    for ext in publish.ICON_EXT_ALLOWED:
+        assert f'upload "*{ext}"' in script, ext
+
+
+def test_document_syncs_exclude_the_asset_directory():
+    """Without the exclude, icons are uploaded twice and the JSON-typed pass may
+    be the one that wins."""
+    workflow = (
+        publish.ROOT / ".github" / "workflows" / "s3-publish.yml"
+    ).read_text(encoding="utf-8")
+    json_syncs = [
+        line for line in workflow.splitlines() if "--content-type \"application/json\"" in line
+    ]
+    assert len(json_syncs) == 2, "expected the revision and pointer syncs"
+    assert workflow.count('--exclude "assets/*"') == len(json_syncs)

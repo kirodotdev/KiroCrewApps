@@ -371,10 +371,22 @@ def normalize_author(value: Any) -> dict[str, Any] | None:
 
 #: A published asset ref is a PATH, never a URL. Rejects a scheme (`https:`,
 #: `data:`, `javascript:`), a protocol-relative `//host`, a `..` segment, a
-#: backslash, and anything outside a conservative path charset.
-_ASSET_REF_RE = re.compile(
-    r"^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./-]+$"
+#: backslash, and anything outside a conservative path charset. A leading `/` is
+#: optional: a builtin's ref is an absolute client-local path, a fetched app's is
+#: relative.
+#:
+#: MUST stay byte-identical to `entry.properties.iconRef.pattern` in
+#: schema/official-registry.schema.json, and `ASSET_REF_MAX` to its `maxLength`.
+#: `test_publish_and_schema_agree_on_the_asset_ref_rule` pins both. The divergence
+#: is not cosmetic: a value this accepts and the schema rejects reaches
+#: `check_schema` on the ASSEMBLED document, whose errors withhold the ENTIRE
+#: catalog publish -- so one app's odd icon path would block every other app's
+#: release, which is exactly what every other field here is careful to avoid.
+ASSET_REF_PATTERN = (
+    r"^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\.\.(?:/|$))/?[A-Za-z0-9_./-]+$"
 )
+ASSET_REF_MAX = 512
+_ASSET_REF_RE = re.compile(ASSET_REF_PATTERN)
 
 
 def bake_asset_ref(
@@ -416,15 +428,31 @@ def bake_asset_ref(
                 f"reads {key}; publishing without it"
             )
         return None
+    # One rule, applied to the value as it will be PUBLISHED. Checking a
+    # transformed copy (an earlier revision matched `value.lstrip("/")`) let
+    # `//app-assets/x.svg` through: it starts with `/` so it looked absolute, and
+    # stripping the slashes made the remainder match -- but the published value
+    # still began with `//`, which the schema refuses, and a schema error on the
+    # assembled document withholds the whole catalog.
+    if len(value) > ASSET_REF_MAX or not _ASSET_REF_RE.match(value):
+        findings.warn(
+            f"{app}: {key} {value!r} is not a publishable path; publishing "
+            f"without it"
+        )
+        return None
+    # Beyond being a valid path, it has to be the RIGHT KIND of path for this
+    # source. A builtin's ref is resolved by the client against its own served
+    # root, so a relative value would silently resolve somewhere else; a fetched
+    # app may not name an absolute location at all, or a publisher could put a
+    # host of their choosing into a document we sign.
     absolute = value.startswith("/")
-    if source_type == "builtin":
-        if not absolute or not _ASSET_REF_RE.match(value.lstrip("/")):
-            findings.warn(
-                f"{app}: builtin {key} {value!r} is not an absolute client-local "
-                f"path; publishing without it"
-            )
-            return None
-    elif absolute or not _ASSET_REF_RE.match(value):
+    if source_type == "builtin" and not absolute:
+        findings.warn(
+            f"{app}: builtin {key} {value!r} is not an absolute client-local "
+            f"path; publishing without it"
+        )
+        return None
+    if source_type != "builtin" and absolute:
         findings.warn(
             f"{app}: {key} {value!r} is not a repo-relative path; publishing "
             f"without it. A fetched manifest may not name an absolute location."
