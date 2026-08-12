@@ -35,13 +35,12 @@ jobs:
     runs-on: ubuntu-latest
     # Runaway/hang backstop only. Keep in sync with claude-review.yml.
     timeout-minutes: 60
-    # The credential condition is deliberately at JOB level, not inside a step.
-    # A step that detects the missing role and exits 0 produces a check-run whose
-    # conclusion is `success` -- so a review that never happened would read as a
-    # review that passed. A job-level condition makes GitHub record `skipped`.
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository
-      && vars.AWS_CODEX_BEDROCK_ROLE_ARN != ''
+    # Same-repo PRs only -- see claude-review.yml for why, and for why there is
+    # deliberately NO credential predicate here: GitHub counts a SKIPPED required
+    # check as satisfied, so gating the job on the role variable would let a
+    # deleted variable disable review silently. A missing role must fail the job
+    # at configure-aws-credentials instead.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
