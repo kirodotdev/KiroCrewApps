@@ -1246,30 +1246,71 @@ class TestIconIngestion:
         "svg",
         [
             b"<svg><script>alert(1)</script></svg>",
+            b"<svg:svg><svg:script>alert(1)</svg:script></svg:svg>",  # namespace prefix
+            "<svg><script>alert(1)</script></svg>".encode("utf-16-le"),  # NUL-interleaved
+            b'<svg><a href="&#106;avascript:alert(1)">x</a></svg>',  # entity-encoded scheme
             b'<svg onload="alert(1)"></svg>',
-            b'<svg><image onerror="x()" /></svg>',
             b"<svg><foreignObject><body/></foreignObject></svg>",
-            b'<!DOCTYPE svg [<!ENTITY x SYSTEM "file:' + b"//" + b'/etc/hosts">]><svg/>',
-            b'<svg><image xlink:href="https://evil.example/p.png"/></svg>',
-            b'<svg><a href="javascript:alert(1)">x</a></svg>',
-            b'<svg><image href="' + b"//" + b'evil.example/p.png"/></svg>',
+            b'<svg viewBox="0 0 24 24"><path d="M1 1h22v22H1z"/></svg>',  # entirely benign
         ],
     )
-    def test_refuses_an_svg_that_is_more_than_pixels(self, svg):
-        """An SVG is a document: it can carry script, event handlers and external
-        references. We serve these from our OWN origin, so anything a client
-        might inline or open top-level is refused here."""
+    def test_svg_is_not_hosted_at_all(self, svg):
+        """Raster only, and that is a DECISION rather than an omission.
+
+        An earlier revision screened SVG text with a regex. Review defeated it
+        three separate ways -- a namespace prefix, a UTF-16 encoding whose ASCII
+        pattern never matches across interleaved NULs, and an entity-encoded
+        scheme in an href. Each is individually fixable and the next one is not:
+        a regex over untrusted XML loses to the parser that actually matters,
+        which is the browser's. So the capability is gone, not patched -- note
+        the benign case is refused too, which is what makes this a rule rather
+        than a filter.
+        """
         assets = publish.IconAssets(reader_for({"i.svg": svg}))
         findings = Findings()
         assert assets.add("https://x/y.git", "a" * 40, "i.svg", "demo", findings) is None
-        assert any("script" in w for w in findings.warnings)
+        assert assets.files == {}
+        assert any("does not host" in w for w in findings.warnings)
 
-    def test_accepts_a_plain_svg(self):
-        svg = b'<svg viewBox="0 0 24 24"><path d="M1 1h22v22H1z" fill="#333"/></svg>'
-        assets = publish.IconAssets(reader_for({"i.svg": svg}))
+    def test_dimension_check_is_skipped_for_formats_it_cannot_measure(self):
+        """`png_dimensions` reads a PNG header; a webp has none to read, so the
+        shape advice is skipped rather than guessed at."""
+        assets = publish.IconAssets(reader_for({"i.webp": b"RIFF....WEBPVP8 "}))
         findings = Findings()
-        ref = assets.add("https://x/y.git", "a" * 40, "i.svg", "demo", findings)
-        assert ref and ref.endswith(".svg")
+        assert assets.add("https://x/y.git", "a" * 40, "i.webp", "demo", findings)
+        assert findings.warnings == []
+
+    def test_the_cap_is_checked_before_the_bytes_are_read(self):
+        """The read buffers the whole object, so a cap applied afterwards never
+        fires on the input it exists for: a repository could hand the publisher a
+        multi-gigabyte file and kill the run before the check it would fail."""
+        reads = []
+
+        def reader(url, commit, path):
+            reads.append(path)
+            return b"never reached"
+
+        assets = publish.IconAssets(reader, lambda u, c, p: publish.ICON_MAX_BYTES + 1)
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert reads == [], "the oversized object must not be read"
+        assert any("over the" in w for w in findings.warnings)
+
+    def test_a_size_probe_failure_warns_rather_than_raising(self):
+        def sizer(url, commit, path):
+            raise publish.PublishError("no such object")
+
+        assets = publish.IconAssets(reader_for({"i.png": png_bytes(512, 512)}), sizer)
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert findings.errors == []
+        assert any("cannot size icon" in w for w in findings.warnings)
+
+    def test_a_within_cap_size_probe_lets_the_read_proceed(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"i.png": data}), lambda u, c, p: len(data))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings)
         assert findings.warnings == []
 
     def test_a_non_square_png_is_published_with_a_warning(self):
@@ -1285,13 +1326,6 @@ class TestIconIngestion:
         findings = Findings()
         assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings)
         assert any("floor" in w for w in findings.warnings)
-
-    def test_dimension_check_is_skipped_for_formats_it_cannot_measure(self):
-        svg = b'<svg viewBox="0 0 24 24"><path d="M0 0h1v1H0z"/></svg>'
-        assets = publish.IconAssets(reader_for({"i.svg": svg}))
-        findings = Findings()
-        assert assets.add("https://x/y.git", "a" * 40, "i.svg", "demo", findings)
-        assert findings.warnings == []
 
     def test_png_dimensions_returns_none_for_anything_else(self):
         assert publish.png_dimensions(b"not a png") is None

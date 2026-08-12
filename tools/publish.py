@@ -461,9 +461,26 @@ def bake_asset_ref(
     return value
 
 
-#: Icon bytes we are willing to host. An allowlist rather than a denylist: the
-#: catalog serves these to every client, so an unrecognised type is a refusal.
-ICON_EXT_ALLOWED = frozenset({".png", ".svg", ".webp", ".jpg", ".jpeg"})
+#: Icon bytes we are willing to host. RASTER ONLY, and that is a decision rather
+#: than an omission.
+#:
+#: An SVG is a document, not pixels: it can carry `<script>`, event handlers,
+#: external references and entity declarations, and we serve what we host from
+#: our OWN origin with `image/svg+xml`, which makes a top-level navigation to it
+#: an executing document on our domain. An earlier revision screened SVG text
+#: with a regex; that screen was defeated three separate ways during review --
+#: a namespace prefix (`<svg:script>`), a UTF-16 encoding (the ASCII pattern
+#: never matches across interleaved NULs), and entity-encoded scheme names in an
+#: href (`&#106;avascript:`). Each is individually fixable and the next one is
+#: not, because a regex over untrusted XML is a losing position: the parser that
+#: matters is the browser's, not ours.
+#:
+#: Re-admitting SVG therefore needs a real XML parse plus a serialisation we
+#: control, not another pattern. Until then a third party ships raster, which is
+#: what the publishing guide already asks for (512x512, opaque). First-party
+#: built-ins keep their themeable inline SVGs -- those are never ingested here,
+#: because the client already ships those bytes.
+ICON_EXT_ALLOWED = frozenset({".png", ".webp", ".jpg", ".jpeg"})
 #: Generous for a 512x512 icon and small enough that a repository cannot make
 #: the catalog carry a payload. The blob-proxy path this replaces had NO cap.
 ICON_MAX_BYTES = 256 * 1024
@@ -473,12 +490,6 @@ ICON_PX_MIN = 128
 #: Where hosted icons land, relative to the catalog root. Content-addressed, so
 #: the path is immutable and a client may cache it forever.
 ICON_ASSET_DIR = "assets/icons"
-
-_SVG_HOSTILE_RE = re.compile(
-    r"<\s*script|<\s*foreignObject|<!ENTITY|\son[a-zA-Z]+\s*=|"
-    r"(?:xlink:)?href\s*=\s*[\"']?\s*(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)",
-    re.IGNORECASE,
-)
 
 
 def run_git_bytes(args: list[str], cwd: Path | None = None) -> bytes:
@@ -501,6 +512,22 @@ def run_git_bytes(args: list[str], cwd: Path | None = None) -> bytes:
             f"{proc.stderr.decode('utf-8', 'replace').strip()[:400]}"
         )
     return proc.stdout
+
+
+def blob_size(url: str, commit: str, path: str) -> int:
+    """Byte size of one file at a commit, WITHOUT reading its contents.
+
+    `git cat-file -s` answers from the object header. Checking the cap before
+    reading matters because the read buffers the whole object in memory: a
+    repository could otherwise hand the publisher a multi-gigabyte file and kill
+    the run before the size check it would have failed.
+    """
+    repo = fetched_repo(url, commit)
+    out = run_git(["cat-file", "-s", f"{commit}:{path}"], cwd=repo).strip()
+    try:
+        return int(out)
+    except ValueError as exc:
+        raise PublishError(f"unexpected size for {path!r}: {out!r}") from exc
 
 
 def fetch_blob(url: str, commit: str, path: str) -> bytes:
@@ -550,8 +577,16 @@ class IconAssets:
     apps that ship the same file.
     """
 
-    def __init__(self, reader: Callable[[str, str, str], bytes]) -> None:
+    def __init__(
+        self,
+        reader: Callable[[str, str, str], bytes],
+        sizer: Callable[[str, str, str], int] | None = None,
+    ) -> None:
         self._reader = reader
+        # Defaults to reading then measuring, which is fine for an injected test
+        # reader; the real pipeline passes `blob_size` so the cap is enforced
+        # before anything is buffered.
+        self._sizer = sizer
         self.files: dict[str, bytes] = {}
 
     def add(
@@ -574,6 +609,20 @@ class IconAssets:
                 f"catalog does not host; publishing without it"
             )
             return None
+        # Size BEFORE bytes. The read below buffers the whole object, so a cap
+        # applied afterwards is a cap that never fires on the input it exists for.
+        if self._sizer is not None:
+            try:
+                size = self._sizer(url, commit, rel_path)
+            except PublishError as exc:
+                findings.warn(f"{app}: cannot size icon {rel_path!r}: {exc}")
+                return None
+            if size > ICON_MAX_BYTES:
+                findings.warn(
+                    f"{app}: icon {rel_path!r} is {size} bytes, over the "
+                    f"{ICON_MAX_BYTES}-byte limit; publishing without it"
+                )
+                return None
         try:
             data = self._reader(url, commit, rel_path)
         except PublishError as exc:
@@ -586,16 +635,6 @@ class IconAssets:
             findings.warn(
                 f"{app}: icon {rel_path!r} is {len(data)} bytes, over the "
                 f"{ICON_MAX_BYTES}-byte limit; publishing without it"
-            )
-            return None
-        if ext == ".svg" and _SVG_HOSTILE_RE.search(data.decode("utf-8", "replace")):
-            # An SVG is a document, not just pixels: it can carry script, event
-            # handlers and external references. We serve these from our own
-            # origin, so anything a client might inline or open top-level has to
-            # be refused here rather than trusted to render inertly.
-            findings.warn(
-                f"{app}: icon {rel_path!r} is an SVG carrying script, an event "
-                f"handler or an external reference; publishing without it"
             )
             return None
         if dims := png_dimensions(data):
@@ -934,7 +973,7 @@ def publish(
         assets = None
     else:
         resolver, fetcher = resolve_commit, fetch_manifest
-        assets = IconAssets(fetch_blob)
+        assets = IconAssets(fetch_blob, blob_size)
 
     try:
         registry_doc = build_registry(

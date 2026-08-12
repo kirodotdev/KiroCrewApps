@@ -13,6 +13,10 @@
 # The extension list must stay in step with ICON_EXT_ALLOWED in tools/publish.py;
 # an extension publish accepts and this script does not upload would land in S3
 # with whatever type the CLI guessed, which is the bug this file exists to fix.
+#
+# Raster only, deliberately: an SVG served from our own origin as
+# image/svg+xml is an executing document on our domain, and screening untrusted
+# XML with a regex was defeated three ways during review. See ICON_EXT_ALLOWED.
 set -euo pipefail
 
 DEST="${1:?usage: upload-assets.sh s3://bucket/prefix/}"
@@ -38,9 +42,5 @@ upload "*.png" "image/png"
 upload "*.jpg" "image/jpeg"
 upload "*.jpeg" "image/jpeg"
 upload "*.webp" "image/webp"
-# Served as image/svg+xml so an <img> renders it. A top-level navigation to this
-# URL would execute script inside the document, which is why publish screens
-# every SVG for script, event handlers and external references before hosting it.
-upload "*.svg" "image/svg+xml"
 
 echo "uploaded dist/assets to ${DEST}assets/"
