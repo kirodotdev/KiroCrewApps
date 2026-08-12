@@ -122,6 +122,15 @@ jobs:
         run: |
           REV="$(python -c "import json;print(json.load(open('dist/official-registry.json'))['revision'])")"
           echo "revision=$REV"
+          # Assets go up BEFORE the document that names them. The document is the
+          # only thing that makes an icon reachable, so publishing it first opens
+          # a window where a client resolves a path whose bytes are not there
+          # yet -- and if the asset step then fails, the signed document is
+          # already live pointing at a 404. Uploading first is safe in a way the
+          # reverse is not: the filename is the sha256 of the contents, so an
+          # asset nothing references yet is inert, re-uploading is idempotent,
+          # and a new digest can never overwrite an old one.
+          ./.github/scripts/upload-assets.sh "s3://${BUCKET}/revisions/${REV}/"
           # Documents and sidecars only. `--content-type` applies to EVERY object
           # a sync uploads, so hosted icons must not ride along in this call --
           # a PNG served as application/json does not render in an <img>.
@@ -131,7 +140,6 @@ jobs:
             --cache-control "public, max-age=31536000, immutable" \
             --content-type "application/json" \
             --no-progress
-          ./.github/scripts/upload-assets.sh "s3://${BUCKET}/revisions/${REV}/"
           echo "REV=$REV" >> "$GITHUB_ENV"
 
       # The rolling pointer clients actually fetch. no-store because a cached
@@ -142,16 +150,18 @@ jobs:
         env:
           BUCKET: ${{ vars.CATALOG_BUCKET }}
         run: |
+          # Same ordering rule as the immutable revision: bytes before the
+          # document that names them. Icons keep the immutable policy even under
+          # the rolling pointer -- the filename is the sha256 of the bytes, so
+          # the URL can never mean something else, and no-store here would
+          # refetch every icon on every load.
+          ./.github/scripts/upload-assets.sh "s3://${BUCKET}/"
           aws s3 sync dist "s3://${BUCKET}/" \
             --exclude "index.html" \
             --exclude "assets/*" \
             --cache-control "no-store, max-age=0" \
             --content-type "application/json" \
             --no-progress
-          # Icons keep the immutable policy even under the rolling pointer: the
-          # filename is the sha256 of the bytes, so the URL can never mean
-          # something else. no-store here would refetch every icon on every load.
-          ./.github/scripts/upload-assets.sh "s3://${BUCKET}/"
           aws s3 cp keys "s3://${BUCKET}/keys/" --recursive \
             --cache-control "public, max-age=300" --no-progress
 

@@ -1556,3 +1556,33 @@ def test_document_syncs_exclude_the_asset_directory():
     ]
     assert len(json_syncs) == 2, "expected the revision and pointer syncs"
     assert workflow.count('--exclude "assets/*"') == len(json_syncs)
+
+
+def test_assets_are_uploaded_before_the_document_that_names_them():
+    """The document is the only thing that makes an icon reachable.
+
+    Publishing it first opens a window where a client resolves a path whose
+    bytes are not there yet, and if the asset step then fails the signed
+    document is already live pointing at a 404. Uploading first is safe in a way
+    the reverse is not: the filename is the sha256 of the contents, so an asset
+    nothing references yet is inert and re-uploading is idempotent.
+
+    Both destinations are checked -- the immutable revision and the rolling
+    pointer -- because they publish the same document to two prefixes.
+    """
+    workflow = (
+        publish.ROOT / ".github" / "workflows" / "s3-publish.yml"
+    ).read_text(encoding="utf-8")
+    lines = workflow.splitlines()
+    assets = [i for i, ln in enumerate(lines) if "upload-assets.sh" in ln]
+    documents = [
+        i for i, ln in enumerate(lines) if 'aws s3 sync dist "s3://' in ln
+    ]
+    assert len(assets) == 2, "expected the revision and pointer asset uploads"
+    assert len(documents) == 2, "expected the revision and pointer document syncs"
+    for asset_line, document_line in zip(assets, documents):
+        assert asset_line < document_line, (
+            "upload-assets.sh must run BEFORE the document sync that references "
+            f"the icons (asset upload at line {asset_line + 1}, document sync at "
+            f"line {document_line + 1})"
+        )
