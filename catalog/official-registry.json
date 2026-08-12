@@ -19,6 +19,24 @@
       "note": "LaunchDarkly Labs; public repo, best-effort support per their CONTRIBUTING. Read-only app: changes no flag state."
     },
     {
+      "name": "todo-ledger",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/qihang-dai/todo-ledger",
+        "ref": "release"
+      },
+      "author": {
+        "name": "qihang-dai",
+        "url": "https://github.com/qihang-dai",
+        "kind": "person"
+      },
+      "categories": [
+        "productivity",
+        "agents-automation"
+      ],
+      "note": "Community app by an individual author; already listed in the bundled seed index, curated here so the two lists agree."
+    },
+    {
       "name": "agent-worlds",
       "source": {
         "type": "builtin",
@@ -282,6 +300,24 @@
       },
       "categories": [
         "research-writing"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
+      "name": "personal-shopper",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "f9cc1fd3a82a9ce48259dd6eb703580fd0f1a94a",
+          "subdir": "src/kiro_crew/apps/builtins/personal_shopper"
+        }
+      },
+      "categories": [
+        "productivity"
       ],
       "author": {
         "name": "Kiro Crew",
