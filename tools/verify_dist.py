@@ -156,6 +156,60 @@ def verify_dir(dist: Path, keys: dict[str, bytes] | None = None) -> list[str]:
 
         print(f"verified {doc.name} ({len(payload)} bytes, {algorithm}, key {key_id})")
 
+    problems.extend(verify_hosted_icons(dist))
+    return problems
+
+
+def verify_hosted_icons(dist: Path) -> list[str]:
+    """Check every hosted icon against the digest in its own filename.
+
+    Icons carry no signature of their own. Their integrity rides on being
+    content-addressed: the filename IS the sha256 of the bytes, and the filename
+    appears in the registry document, which is signed and verified above. So the
+    chain is signature -> document -> path -> bytes, and this closes the last
+    link for the artifacts we are about to upload.
+
+    It is also the reference implementation of what a CLIENT must do after
+    downloading an icon. Publishing a document that names a digest and then
+    serving bytes that do not match it would be undetectable to anyone who
+    skipped this step, which is exactly why the step is written down as code
+    rather than as a sentence in the schema.
+    """
+    problems: list[str] = []
+    registry = dist / "official-registry.json"
+    if not registry.is_file():
+        return problems
+    try:
+        doc = json.loads(registry.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return problems  # already reported by the signature pass above
+
+    checked = 0
+    for entry in doc.get("apps") or []:
+        if not isinstance(entry, dict):
+            continue
+        for field in ("iconRef", "iconRefDark"):
+            ref = entry.get(field)
+            # An absolute ref is a builtin's client-local path: those bytes ship
+            # with the client, so there is nothing here to check.
+            if not isinstance(ref, str) or not ref or ref.startswith("/"):
+                continue
+            path = dist / ref
+            if not path.is_file():
+                problems.append(
+                    f"{entry.get('name')}: {field} names {ref!r}, which is not in {dist}"
+                )
+                continue
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            if actual != path.stem:
+                problems.append(
+                    f"{entry.get('name')}: {field} {ref!r} is addressed by digest "
+                    f"{path.stem!r} but its bytes hash to {actual!r}"
+                )
+                continue
+            checked += 1
+    if checked:
+        print(f"verified {checked} hosted icon(s) against their content digests")
     return problems
 
 

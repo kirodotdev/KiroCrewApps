@@ -59,13 +59,27 @@ def git(*args: str, cwd: Path) -> str:
     return proc.stdout.strip()
 
 
-def make_repo(path: Path, manifest: dict, subdir: str | None = None) -> str:
-    """Create a real one-commit repo containing app.json. Returns the commit."""
+def make_repo(
+    path: Path,
+    manifest: dict,
+    subdir: str | None = None,
+    extra: dict[str, bytes] | None = None,
+) -> str:
+    """Create a real one-commit repo containing app.json. Returns the commit.
+
+    *extra* adds files by repo-relative path, so a test can commit real BINARY
+    content (an icon) and exercise the byte-exact read path rather than stubbing
+    it -- a text-mode `git show` would corrupt those bytes silently.
+    """
     path.mkdir(parents=True, exist_ok=True)
     git("init", "--quiet", "-b", "main", ".", cwd=path)
     target = path / subdir if subdir else path
     target.mkdir(parents=True, exist_ok=True)
     (target / "app.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for rel, payload in (extra or {}).items():
+        dest = path / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload)
     git("add", "-A", cwd=path)
     git("commit", "--quiet", "-m", "init", cwd=path)
     return git("rev-parse", "HEAD", cwd=path)
@@ -1046,7 +1060,14 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
     tmp_path, allow_local_urls, monkeypatch
 ):
     repo = tmp_path / "repo"
-    commit = make_repo(repo, MANIFEST)
+    # A real icon committed as real bytes: this is the only place the byte-exact
+    # read through `git show` runs for real. It deliberately contains every byte
+    # value, which a text-mode read would mangle.
+    icon = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + (512).to_bytes(4, "big") * 2
+    icon += bytes(range(256)) * 2
+    manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+    manifest["iconPath"] = "assets/icon.png"
+    commit = make_repo(repo, manifest, extra={"assets/icon.png": icon})
 
     catalog = tmp_path / "catalog"
     catalog.mkdir()
@@ -1124,3 +1145,263 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
         sidecar = json.loads((out / f"{name}.sig").read_text())
         assert sidecar["payloadSha256"] == hashlib.sha256(payload).hexdigest()
         verify_rsa(kms.public_der(), base64.b64decode(sidecar["signature"]), payload)
+
+    # The icon was INGESTED: the entry names a path under our own root, the file
+    # is on disk byte-for-byte, and its name is the digest of those bytes.
+    digest = hashlib.sha256(icon).hexdigest()
+    assert entry["iconRef"] == f"assets/icons/{digest}.png"
+    hosted = out / entry["iconRef"]
+    assert hosted.read_bytes() == icon, "a text-mode read would corrupt these bytes"
+    # No sidecar of its own: integrity rides on the digest in the filename, which
+    # lives inside the registry document that IS signed. One signature, every
+    # icon covered -- and a client checks an icon by hashing what it downloaded.
+    assert not (out / f"{entry['iconRef']}.sig").exists()
+
+
+# ---------------------------------------------------------------------------
+# The catalog HOSTS icon bytes
+# ---------------------------------------------------------------------------
+#
+# Before this, a third-party icon stayed in the publisher's repository and every
+# client fetched it by cloning that repository through a proxy: one shallow clone
+# per uncached image, no byte cap, a cache keyed on a moving branch, and a grid
+# that broke when a repo was renamed or made private. Hosting the bytes takes the
+# publisher's infrastructure out of the render path.
+
+
+def png_bytes(width: int, height: int, filler: bytes = b"\x00" * 32) -> bytes:
+    """A byte string with a REAL PNG header. Only the header is ever parsed."""
+    ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    return b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\r" + b"IHDR" + ihdr + filler
+
+
+def reader_for(files: dict[str, bytes]):
+    def read(url: str, commit: str, path: str) -> bytes:
+        if path not in files:
+            raise publish.PublishError(f"cannot read {path}")
+        return files[path]
+
+    return read
+
+
+class TestIconIngestion:
+    def test_stores_bytes_under_their_own_digest(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"a/i.png": data}))
+        findings = Findings()
+        ref = assets.add("https://x/y.git", "a" * 40, "a/i.png", "demo", findings)
+        digest = hashlib.sha256(data).hexdigest()
+        assert ref == f"assets/icons/{digest}.png"
+        assert assets.files[ref] == data
+        assert findings.warnings == []
+
+    def test_the_digest_in_the_path_is_the_digest_of_the_bytes(self):
+        """This is the whole integrity story: the path is inside the SIGNED
+        document, so a client hashing the file it downloaded against its own path
+        gets end-to-end integrity from one signature over one document."""
+        data = png_bytes(512, 512, b"\x11" * 64)
+        assets = publish.IconAssets(reader_for({"i.png": data}))
+        ref = assets.add("https://x/y.git", "a" * 40, "i.png", "demo", Findings())
+        assert Path(ref).stem == hashlib.sha256(assets.files[ref]).hexdigest()
+
+    def test_identical_bytes_converge_on_one_file(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"one.png": data, "two.png": data}))
+        findings = Findings()
+        first = assets.add("https://x/y.git", "a" * 40, "one.png", "app-one", findings)
+        second = assets.add("https://x/y.git", "a" * 40, "two.png", "app-two", findings)
+        assert first == second
+        assert len(assets.files) == 1
+
+    @pytest.mark.parametrize("path", ["i.exe", "i.html", "i.gif", "i", "i.PNG.txt"])
+    def test_refuses_a_type_the_catalog_will_not_host(self, path):
+        assets = publish.IconAssets(reader_for({path: png_bytes(512, 512)}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, path, "demo", findings) is None
+        assert assets.files == {}
+        assert any("does not host" in w for w in findings.warnings)
+
+    def test_refuses_an_oversized_icon(self):
+        big = png_bytes(512, 512, b"\x00" * (publish.ICON_MAX_BYTES + 1))
+        assets = publish.IconAssets(reader_for({"i.png": big}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert any("over the" in w for w in findings.warnings)
+
+    def test_refuses_an_empty_icon(self):
+        assets = publish.IconAssets(reader_for({"i.png": b""}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert any("is empty" in w for w in findings.warnings)
+
+    def test_an_unreadable_icon_warns_rather_than_raising(self):
+        """One missing file must not halt every other app's release."""
+        assets = publish.IconAssets(reader_for({}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert findings.errors == []
+        assert any("cannot read icon" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize(
+        "svg",
+        [
+            b"<svg><script>alert(1)</script></svg>",
+            b'<svg onload="alert(1)"></svg>',
+            b'<svg><image onerror="x()" /></svg>',
+            b"<svg><foreignObject><body/></foreignObject></svg>",
+            b'<!DOCTYPE svg [<!ENTITY x SYSTEM "file:' + b"//" + b'/etc/hosts">]><svg/>',
+            b'<svg><image xlink:href="https://evil.example/p.png"/></svg>',
+            b'<svg><a href="javascript:alert(1)">x</a></svg>',
+            b'<svg><image href="' + b"//" + b'evil.example/p.png"/></svg>',
+        ],
+    )
+    def test_refuses_an_svg_that_is_more_than_pixels(self, svg):
+        """An SVG is a document: it can carry script, event handlers and external
+        references. We serve these from our OWN origin, so anything a client
+        might inline or open top-level is refused here."""
+        assets = publish.IconAssets(reader_for({"i.svg": svg}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.svg", "demo", findings) is None
+        assert any("script" in w for w in findings.warnings)
+
+    def test_accepts_a_plain_svg(self):
+        svg = b'<svg viewBox="0 0 24 24"><path d="M1 1h22v22H1z" fill="#333"/></svg>'
+        assets = publish.IconAssets(reader_for({"i.svg": svg}))
+        findings = Findings()
+        ref = assets.add("https://x/y.git", "a" * 40, "i.svg", "demo", findings)
+        assert ref and ref.endswith(".svg")
+        assert findings.warnings == []
+
+    def test_a_non_square_png_is_published_with_a_warning(self):
+        """Shape is advice, not a gate: a card with a slightly wrong aspect beats
+        a card with no icon."""
+        assets = publish.IconAssets(reader_for({"i.png": png_bytes(512, 256)}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings)
+        assert any("not square" in w for w in findings.warnings)
+
+    def test_a_small_square_png_warns_about_the_floor(self):
+        assets = publish.IconAssets(reader_for({"i.png": png_bytes(64, 64)}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings)
+        assert any("floor" in w for w in findings.warnings)
+
+    def test_dimension_check_is_skipped_for_formats_it_cannot_measure(self):
+        svg = b'<svg viewBox="0 0 24 24"><path d="M0 0h1v1H0z"/></svg>'
+        assets = publish.IconAssets(reader_for({"i.svg": svg}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.svg", "demo", findings)
+        assert findings.warnings == []
+
+    def test_png_dimensions_returns_none_for_anything_else(self):
+        assert publish.png_dimensions(b"not a png") is None
+        assert publish.png_dimensions(b"") is None
+        assert publish.png_dimensions(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4) is None
+
+
+class TestBakeEntryHostsFetchedIcons:
+    def test_a_fetched_icon_becomes_a_hosted_path(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"assets/icon.png": data}))
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "assets/icon.png"
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings(), assets)
+        assert entry["iconRef"] == f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
+        assert assets.files
+
+    def test_a_builtin_icon_is_not_ingested(self):
+        """The client already ships those bytes. Hosting a second copy would add
+        download weight and a second source of truth."""
+        assets = publish.IconAssets(reader_for({}))
+        entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings(), assets)
+        assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
+        assert assets.files == {}
+
+    def test_a_refused_icon_leaves_the_field_off_the_entry(self):
+        """Not an empty string: a falsy ref is still a key every client has to
+        special-case."""
+        assets = publish.IconAssets(reader_for({}))
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "assets/missing.png"
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings(), assets)
+        assert "iconRef" not in entry
+
+    def test_both_appearances_are_ingested(self):
+        light = png_bytes(512, 512, b"\x01" * 32)
+        dark = png_bytes(512, 512, b"\x02" * 32)
+        assets = publish.IconAssets(reader_for({"i.png": light, "i-dark.png": dark}))
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "i.png"
+        manifest["iconPathDark"] = "i-dark.png"
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings(), assets)
+        assert entry["iconRef"] != entry["iconRefDark"]
+        assert len(assets.files) == 2
+
+
+# ---------------------------------------------------------------------------
+# verify_dist closes the last link of the integrity chain
+# ---------------------------------------------------------------------------
+#
+# An icon carries no signature. Its integrity rides on being content-addressed:
+# the filename IS the sha256 of the bytes, and that filename lives in the signed
+# registry document. So the chain is signature -> document -> path -> bytes, and
+# verify_dist is both the pre-upload gate for the last link and the reference
+# implementation of what a client must do after downloading an icon.
+
+
+def dist_with_icon(tmp_path, ref: str, data: bytes, on_disk: bytes | None = None):
+    """A dist dir holding one entry naming *ref*, with *on_disk* bytes stored."""
+    dist = tmp_path / "dist"
+    (dist / "assets" / "icons").mkdir(parents=True)
+    (dist / "official-registry.json").write_text(
+        json.dumps({"schemaVersion": 1, "apps": [{"name": "demo-app", "iconRef": ref}]})
+    )
+    if on_disk is not None:
+        (dist / ref).write_bytes(on_disk)
+    return dist
+
+
+def test_verify_dist_accepts_a_matching_icon_digest(tmp_path):
+    from verify_dist import verify_hosted_icons
+
+    data = b"\x89PNG\r\n\x1a\nwhatever"
+    ref = f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
+    assert verify_hosted_icons(dist_with_icon(tmp_path, ref, data, data)) == []
+
+
+def test_verify_dist_catches_bytes_that_do_not_match_their_digest(tmp_path):
+    """The case the whole scheme exists to catch: a document naming one digest
+    while the served bytes are something else. Undetectable to a client that
+    skips this check, which is why it is code and not a sentence in the schema."""
+    from verify_dist import verify_hosted_icons
+
+    honest = b"\x89PNG\r\n\x1a\nhonest"
+    ref = f"assets/icons/{hashlib.sha256(honest).hexdigest()}.png"
+    problems = verify_hosted_icons(dist_with_icon(tmp_path, ref, honest, b"swapped"))
+    assert len(problems) == 1
+    assert "bytes hash to" in problems[0]
+
+
+def test_verify_dist_catches_a_missing_icon(tmp_path):
+    from verify_dist import verify_hosted_icons
+
+    data = b"\x89PNG\r\n\x1a\ngone"
+    ref = f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
+    problems = verify_hosted_icons(dist_with_icon(tmp_path, ref, data, None))
+    assert len(problems) == 1
+    assert "is not in" in problems[0]
+
+
+def test_verify_dist_ignores_a_builtin_client_local_ref(tmp_path):
+    """Those bytes ship with the client, so there is nothing in dist to check."""
+    from verify_dist import verify_hosted_icons
+
+    dist = dist_with_icon(tmp_path, "/app-assets/demo-app/icon.svg", b"", None)
+    assert verify_hosted_icons(dist) == []
+
+
+def test_verify_dist_is_quiet_when_there_is_no_registry(tmp_path):
+    from verify_dist import verify_hosted_icons
+
+    (tmp_path / "empty").mkdir()
+    assert verify_hosted_icons(tmp_path / "empty") == []

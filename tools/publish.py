@@ -372,7 +372,9 @@ def normalize_author(value: Any) -> dict[str, Any] | None:
 #: A published asset ref is a PATH, never a URL. Rejects a scheme (`https:`,
 #: `data:`, `javascript:`), a protocol-relative `//host`, a `..` segment, a
 #: backslash, and anything outside a conservative path charset.
-_ASSET_REF_RE = re.compile(r"^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./-]+$")
+_ASSET_REF_RE = re.compile(
+    r"^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\.\.(?:/|$))[A-Za-z0-9_./-]+$"
+)
 
 
 def bake_asset_ref(
@@ -431,13 +433,178 @@ def bake_asset_ref(
     return value
 
 
+#: Icon bytes we are willing to host. An allowlist rather than a denylist: the
+#: catalog serves these to every client, so an unrecognised type is a refusal.
+ICON_EXT_ALLOWED = frozenset({".png", ".svg", ".webp", ".jpg", ".jpeg"})
+#: Generous for a 512x512 icon and small enough that a repository cannot make
+#: the catalog carry a payload. The blob-proxy path this replaces had NO cap.
+ICON_MAX_BYTES = 256 * 1024
+#: Below this an icon is visibly soft in the detail view; the store renders at
+#: 28px in a list capsule, so this is about headroom, not the render size.
+ICON_PX_MIN = 128
+#: Where hosted icons land, relative to the catalog root. Content-addressed, so
+#: the path is immutable and a client may cache it forever.
+ICON_ASSET_DIR = "assets/icons"
+
+_SVG_HOSTILE_RE = re.compile(
+    r"<\s*script|<\s*foreignObject|<!ENTITY|\son[a-zA-Z]+\s*=|"
+    r"(?:xlink:)?href\s*=\s*[\"']?\s*(?:[a-zA-Z][a-zA-Z0-9+.-]*:|//)",
+    re.IGNORECASE,
+)
+
+
+def run_git_bytes(args: list[str], cwd: Path | None = None) -> bytes:
+    """``run_git`` for content that is not text.
+
+    Image bytes decoded as UTF-8 are corrupt bytes, so reading a PNG through the
+    text-mode helper would silently produce a different file than the repository
+    holds -- and the digest we then publish would be a digest of the corruption.
+    """
+    proc = subprocess.run(
+        ["git", *GIT_HARDENING, *args],
+        cwd=str(cwd) if cwd else None,
+        env=GIT_ENV,
+        capture_output=True,
+        timeout=GIT_TIMEOUT,
+    )
+    if proc.returncode != 0:
+        raise PublishError(
+            f"git {' '.join(args[:2])} failed ({proc.returncode}): "
+            f"{proc.stderr.decode('utf-8', 'replace').strip()[:400]}"
+        )
+    return proc.stdout
+
+
+def fetch_blob(url: str, commit: str, path: str) -> bytes:
+    """Read one file's bytes from a repository at an exact commit.
+
+    Reuses the checkout ``fetch_manifest`` already made for this ``(url,
+    commit)``, so hosting an icon costs no extra network round trip -- the file
+    is sitting in a tree we have.
+    """
+    repo = fetched_repo(url, commit)
+    return run_git_bytes(["show", f"{commit}:{path}"], cwd=repo)
+
+
+def png_dimensions(data: bytes) -> tuple[int, int] | None:
+    """Width and height from a PNG header, or None if it is not a PNG.
+
+    Header-only, so it needs no image library: signature, then the IHDR chunk's
+    two big-endian 32-bit fields. Anything else returns None and goes unchecked
+    rather than blocking a format we cannot measure.
+    """
+    if len(data) < 24 or data[:8] != b"\x89PNG\r\n\x1a\n" or data[12:16] != b"IHDR":
+        return None
+    return (
+        int.from_bytes(data[16:20], "big"),
+        int.from_bytes(data[20:24], "big"),
+    )
+
+
+class IconAssets:
+    """Collects icon bytes to publish alongside the catalog documents.
+
+    WHY THE CATALOG HOSTS THESE. Before this, a third-party icon stayed in the
+    publisher's repository and every client fetched it by cloning that repository
+    through a proxy -- one shallow clone per uncached image, no byte cap, a cache
+    keyed on a moving branch, and a store grid that broke when a repo was renamed
+    or made private. Hosting the bytes removes the publisher's infrastructure
+    from the render path entirely, which is the same move Apple makes: the icon
+    is uploaded at submission and served from the store's own CDN, never from the
+    developer's servers.
+
+    HOW INTEGRITY WORKS WITHOUT SIGNING EACH FILE. The stored name is the
+    sha256 of the bytes, and that name appears in the registry document, which IS
+    signed. So a client that verifies the document signature and then checks the
+    downloaded bytes against the digest in the path has end-to-end integrity for
+    every icon, with one signature over one document. Content addressing also
+    makes the URL immutable (cache forever, no TTL question) and deduplicates two
+    apps that ship the same file.
+    """
+
+    def __init__(self, reader: Callable[[str, str, str], bytes]) -> None:
+        self._reader = reader
+        self.files: dict[str, bytes] = {}
+
+    def add(
+        self,
+        url: str,
+        commit: str,
+        rel_path: str,
+        app: str,
+        findings: Findings,
+    ) -> str | None:
+        """Ingest one icon, returning its catalog-relative path.
+
+        Every rejection is a WARNING, never an error: a bad icon costs one card
+        its picture, and halting would take every other app's release with it.
+        """
+        ext = Path(rel_path).suffix.lower()
+        if ext not in ICON_EXT_ALLOWED:
+            findings.warn(
+                f"{app}: icon {rel_path!r} has type {ext or '(none)'!r}, which the "
+                f"catalog does not host; publishing without it"
+            )
+            return None
+        try:
+            data = self._reader(url, commit, rel_path)
+        except PublishError as exc:
+            findings.warn(f"{app}: cannot read icon {rel_path!r}: {exc}")
+            return None
+        if not data:
+            findings.warn(f"{app}: icon {rel_path!r} is empty; publishing without it")
+            return None
+        if len(data) > ICON_MAX_BYTES:
+            findings.warn(
+                f"{app}: icon {rel_path!r} is {len(data)} bytes, over the "
+                f"{ICON_MAX_BYTES}-byte limit; publishing without it"
+            )
+            return None
+        if ext == ".svg" and _SVG_HOSTILE_RE.search(data.decode("utf-8", "replace")):
+            # An SVG is a document, not just pixels: it can carry script, event
+            # handlers and external references. We serve these from our own
+            # origin, so anything a client might inline or open top-level has to
+            # be refused here rather than trusted to render inertly.
+            findings.warn(
+                f"{app}: icon {rel_path!r} is an SVG carrying script, an event "
+                f"handler or an external reference; publishing without it"
+            )
+            return None
+        if dims := png_dimensions(data):
+            width, height = dims
+            if width != height:
+                findings.warn(
+                    f"{app}: icon {rel_path!r} is {width}x{height}, not square; "
+                    f"the store renders it in a square box"
+                )
+            elif width < ICON_PX_MIN:
+                findings.warn(
+                    f"{app}: icon {rel_path!r} is {width}x{height}, below the "
+                    f"{ICON_PX_MIN}px floor; it will look soft on the detail page"
+                )
+
+        digest = hashlib.sha256(data).hexdigest()
+        stored = f"{ICON_ASSET_DIR}/{digest}{ext}"
+        # Two apps shipping identical bytes converge on one file, and re-running
+        # publish is idempotent for the same input.
+        self.files[stored] = data
+        return stored
+
+
 def bake_entry(
     authored: dict[str, Any],
     manifest: dict[str, Any],
     commit: str,
     findings: Findings,
+    assets: IconAssets | None = None,
 ) -> dict[str, Any]:
-    """Produce a published entry: authored identity + generated display fields."""
+    """Produce a published entry: authored identity + generated display fields.
+
+    *assets*, when given, ingests a fetched app's icon into the catalog and the
+    entry carries the hosted path instead of the repo-relative one. Omitted (as
+    in a dry run, and in tests that only exercise field derivation) the entry
+    keeps the repo-relative path, which is still a valid published ref.
+    """
     name = authored["name"]
     if manifest.get("name") and manifest["name"] != name:
         # The catalog and the app disagree about what the app is called. Picking
@@ -527,15 +694,24 @@ def bake_entry(
     # `iconPath` is the key a fetched app declares; `iconUrl` is the absolute
     # client-local path a builtin declares. Reading the wrong one per source type
     # is why third-party entries used to publish no icon at all.
-    if icon := bake_asset_ref(manifest, source_type, "iconUrl", "iconPath", findings, name):
-        entry["iconRef"] = icon
-    # Optional dark-appearance variant. Raster art has fixed bytes, so an app
-    # that must read well on both backgrounds ships two files; a builtin's
-    # themeable inline SVG repaints from tokens and needs none.
-    if dark := bake_asset_ref(
-        manifest, source_type, "iconUrlDark", "iconPathDark", findings, name
+    #
+    # A builtin's ref is published as-is: the client already ships those bytes,
+    # so hosting a second copy would add download weight and a second source of
+    # truth. Every other source's icon is INGESTED -- the repo-relative path is
+    # replaced by a content-addressed path under our own root, so the render path
+    # no longer depends on the publisher's repository being reachable.
+    for key_abs, key_rel, field in (
+        ("iconUrl", "iconPath", "iconRef"),
+        ("iconUrlDark", "iconPathDark", "iconRefDark"),
     ):
-        entry["iconRefDark"] = dark
+        ref = bake_asset_ref(manifest, source_type, key_abs, key_rel, findings, name)
+        if not ref:
+            continue
+        if source_type != "builtin" and assets is not None:
+            ref = assets.add(source["url"], commit, ref, name, findings)
+            if not ref:
+                continue
+        entry[field] = ref
     if hero := manifest_str(manifest, "heroImage"):
         entry["heroRef"] = hero
 
@@ -563,6 +739,7 @@ def build_registry(
     fetcher: Callable[..., dict[str, Any]],
     now: datetime,
     findings: Findings,
+    assets: IconAssets | None = None,
 ) -> dict[str, Any]:
     apps: list[dict[str, Any]] = []
     for authored_entry in authored.get("apps") or []:
@@ -573,7 +750,7 @@ def build_registry(
         origin = source["manifestFrom"] if source.get("type") == "builtin" else source
         commit = resolver(origin["url"], origin["ref"])
         manifest = fetcher(origin["url"], commit, origin.get("subdir"))
-        apps.append(bake_entry(authored_entry, manifest, commit, findings))
+        apps.append(bake_entry(authored_entry, manifest, commit, findings, assets))
 
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     content = {
@@ -720,17 +897,20 @@ def publish(
 
     resolver: Callable[[str, str], str]
     fetcher: Callable[..., dict[str, Any]]
+    assets: IconAssets | None
     if dry_run:
         # Enough to exercise stamping and schema conformance offline. Publishing
         # for real must never take this path, hence the separate flag.
         resolver = lambda url, ref: ref if COMMIT_RE.match(ref) else "0" * 40  # noqa: E731
         fetcher = lambda url, commit, subdir=None: {}  # noqa: E731
+        assets = None
     else:
         resolver, fetcher = resolve_commit, fetch_manifest
+        assets = IconAssets(fetch_blob)
 
     try:
         registry_doc = build_registry(
-            authored_registry, resolver, fetcher, now, findings
+            authored_registry, resolver, fetcher, now, findings, assets
         )
     except PublishError as exc:
         findings.error(str(exc))
@@ -778,9 +958,18 @@ def publish(
             findings.error(str(exc))
             return findings
 
+    # Icons are added AFTER signing on purpose: they get no sidecar of their own.
+    # Their integrity rides on the digest in the filename, which appears in the
+    # registry document that IS signed -- so one signature covers every icon, and
+    # a client checks a downloaded icon by hashing it against its own path.
+    if assets is not None:
+        artifacts.update(assets.files)
+
     out_dir.mkdir(parents=True, exist_ok=True)
     for filename, payload in artifacts.items():
-        (out_dir / filename).write_bytes(payload)
+        path = out_dir / filename
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(payload)
 
     print(f"revision {registry_doc['revision']}")
     for filename in sorted(artifacts):
