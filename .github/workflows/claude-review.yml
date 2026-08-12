@@ -36,15 +36,16 @@ jobs:
     # assumption could never succeed, and running an agentic reviewer on fork
     # content is the prompt-injection surface this guard closes.
     #
-    # The credential condition is deliberately at JOB level, not inside a step.
-    # A step that detects the missing role and exits 0 produces a check-run whose
-    # conclusion is `success` -- so a review that never happened would read as a
-    # review that passed, to the checks list and to any required-check rule. A
-    # job-level condition makes GitHub record `skipped` instead, which is
-    # visibly not a pass.
-    if: >-
-      github.event.pull_request.head.repo.full_name == github.repository
-      && vars.AWS_BEDROCK_ROLE_ARN != ''
+    # There is deliberately NO credential predicate here. An earlier revision
+    # gated the job on `vars.AWS_BEDROCK_ROLE_ARN != ''` so an unconfigured lane
+    # would record `skipped` rather than a green `success`. That reasoning was
+    # half right and dangerous: GitHub treats a SKIPPED required check as
+    # SATISFIED for branch protection, so deleting the variable would silently
+    # disable review while the PR still looked mergeable -- a strictly worse
+    # failure than a red check. With no predicate, a missing role makes
+    # configure-aws-credentials fail and the job goes RED, which is the only
+    # state that cannot be mistaken for a completed review.
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       # persist-credentials:false stops actions/checkout from writing the
       # GITHUB_TOKEN into .git/config, where a read-only agentic reviewer could
