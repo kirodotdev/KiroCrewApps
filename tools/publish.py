@@ -658,6 +658,113 @@ class IconAssets:
         return stored
 
 
+EDITORIAL_ASSET_DIR = "assets/editorial"
+#: Editorial artwork is a wide hero image, not a 512px tile, so it gets its own
+#: ceiling. Same raster whitelist as icons: SVG is a script host and a regex
+#: screen over untrusted XML lost three separate ways.
+ART_EXT_ALLOWED = frozenset({".png", ".webp", ".jpg", ".jpeg"})
+ART_MAX_BYTES = 1024 * 1024
+#: The placement this art fills. A mismatch is a WARNING, not a refusal: a
+#: slightly-off crop is a curation nit, and refusing would take the whole
+#: release with it.
+ART_ASPECT = 1600 / 900
+ART_ASPECT_TOLERANCE = 0.08
+
+
+class EditorialAssets:
+    """Collects curator-authored artwork to publish alongside the documents.
+
+    Separate from `IconAssets` because the SOURCE differs, not the mechanism: an
+    app icon is a blob in the publisher's repository at a pinned commit, while
+    editorial artwork is a file in THIS repository that a curator committed
+    alongside the section that names it. The naming and integrity story is
+    deliberately identical -- sha256 of the bytes as the filename, that name
+    inside the signed document -- so `verify_dist` proves both with one pass and
+    a client needs no second rule for artwork.
+
+    Path containment is enforced here rather than trusted from the schema: the
+    schema's pattern rejects the spellings it knows, and this rejects anything
+    that resolves outside the repository root after symlinks.
+    """
+
+    def __init__(self, root: Path) -> None:
+        self._root = root.resolve()
+        self.files: dict[str, bytes] = {}
+
+    def add(self, rel_path: str, where: str, findings: Findings) -> str | None:
+        """Ingest one artwork file, returning its catalog-relative path.
+
+        Every rejection is a WARNING: a bad image costs one section its picture,
+        and halting would take every other section's release with it.
+        """
+        ext = Path(rel_path).suffix.lower()
+        if ext not in ART_EXT_ALLOWED:
+            findings.warn(
+                f"{where}: artwork {rel_path!r} has type {ext or '(none)'!r}, which the "
+                f"catalog does not host; publishing without it"
+            )
+            return None
+
+        # Resolve THEN contain. A path that leaves the repository is refused even
+        # if the schema's pattern happened to admit its spelling, and symlinks are
+        # resolved first so a link inside the repo cannot point outside it.
+        #
+        # `RuntimeError` is in the tuple because `Path.resolve()` raises it -- NOT
+        # an OSError -- on a symlink loop (`art/loop.png -> loop.png`, or a mutual
+        # pair). Without it a single bad link aborts the whole publish, which
+        # contradicts the warn-and-continue contract every other rejection here
+        # keeps: one image loses its placement, never the release.
+        try:
+            resolved = (self._root / rel_path).resolve()
+            resolved.relative_to(self._root)
+        except (OSError, RuntimeError, ValueError):
+            findings.warn(
+                f"{where}: artwork {rel_path!r} resolves outside the repository; "
+                f"publishing without it"
+            )
+            return None
+        if not resolved.is_file():
+            findings.warn(f"{where}: artwork {rel_path!r} is not a file in this repository")
+            return None
+
+        # Size before bytes: a cap applied after the read is a cap that never
+        # fires on the input it exists for.
+        try:
+            size = resolved.stat().st_size
+        except OSError as exc:
+            findings.warn(f"{where}: cannot size artwork {rel_path!r}: {exc}")
+            return None
+        if size > ART_MAX_BYTES:
+            findings.warn(
+                f"{where}: artwork {rel_path!r} is {size} bytes, over the "
+                f"{ART_MAX_BYTES}-byte limit; publishing without it"
+            )
+            return None
+        try:
+            data = resolved.read_bytes()
+        except OSError as exc:
+            findings.warn(f"{where}: cannot read artwork {rel_path!r}: {exc}")
+            return None
+        if not data:
+            findings.warn(f"{where}: artwork {rel_path!r} is empty; publishing without it")
+            return None
+
+        if dims := png_dimensions(data):
+            width, height = dims
+            if height and abs((width / height) - ART_ASPECT) > ART_ASPECT_TOLERANCE:
+                findings.warn(
+                    f"{where}: artwork {rel_path!r} is {width}x{height}; the placement is "
+                    f"16:9, so the store will letterbox or crop it"
+                )
+
+        digest = hashlib.sha256(data).hexdigest()
+        stored = f"{EDITORIAL_ASSET_DIR}/{digest}{ext}"
+        # Two sections sharing one image converge on one file, and re-running
+        # publish is idempotent for the same input.
+        self.files[stored] = data
+        return stored
+
+
 def bake_entry(
     authored: dict[str, Any],
     manifest: dict[str, Any],
@@ -840,9 +947,70 @@ def build_registry(
     return doc
 
 
-def build_editorial(authored: dict[str, Any], now: datetime) -> dict[str, Any]:
+def bake_editorial_artwork(
+    doc: dict[str, Any],
+    assets: EditorialAssets | None,
+    findings: Findings,
+) -> dict[str, Any]:
+    """Replace each section's authored artwork paths with hosted ones.
+
+    Mutates a COPY: the authored file on disk keeps the curator's own paths, so a
+    republish is deterministic from the same inputs rather than from whatever a
+    previous run rewrote.
+
+    A section whose artwork cannot be ingested keeps the section and loses the
+    picture. Dropping the section instead would silently remove a curated
+    placement because an image was a few bytes too large.
+    """
+    sections = doc.get("sections")
+    if not isinstance(sections, list) or assets is None:
+        return doc
+
+    baked: list[Any] = []
+    for idx, section in enumerate(sections):
+        if not isinstance(section, dict) or "artwork" not in section:
+            baked.append(section)
+            continue
+        art = section.get("artwork")
+        if not isinstance(art, dict):
+            baked.append(section)
+            continue
+
+        where = f"sections[{idx}]"
+        out = dict(art)
+        for key in ("ref", "refDark"):
+            rel = art.get(key)
+            if not isinstance(rel, str) or not rel:
+                continue
+            hosted = assets.add(rel, f"{where}.{key}", findings)
+            if hosted:
+                out[key] = hosted
+            else:
+                out.pop(key, None)
+
+        section_out = dict(section)
+        # `ref` is required by the schema, so artwork that lost its light variant
+        # is no longer valid artwork -- drop the whole block rather than emit a
+        # dark-only object the published-schema check would then reject.
+        if "ref" in out:
+            section_out["artwork"] = out
+        else:
+            section_out.pop("artwork", None)
+        baked.append(section_out)
+
+    return {**doc, "sections": baked}
+
+
+def build_editorial(
+    authored: dict[str, Any],
+    now: datetime,
+    assets: EditorialAssets | None = None,
+    findings: Findings | None = None,
+) -> dict[str, Any]:
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     doc = {k: v for k, v in authored.items() if k != "schemaVersion"}
+    if assets is not None and findings is not None:
+        doc = bake_editorial_artwork(doc, assets, findings)
     content_only = {k: v for k, v in doc.items() if k not in ("generatedAt", "revision")}
     return {
         "schemaVersion": 1,
@@ -965,15 +1133,18 @@ def publish(
     resolver: Callable[[str, str], str]
     fetcher: Callable[..., dict[str, Any]]
     assets: IconAssets | None
+    art: EditorialAssets | None
     if dry_run:
         # Enough to exercise stamping and schema conformance offline. Publishing
         # for real must never take this path, hence the separate flag.
         resolver = lambda url, ref: ref if COMMIT_RE.match(ref) else "0" * 40  # noqa: E731
         fetcher = lambda url, commit, subdir=None: {}  # noqa: E731
         assets = None
+        art = None
     else:
         resolver, fetcher = resolve_commit, fetch_manifest
         assets = IconAssets(fetch_blob, blob_size)
+        art = EditorialAssets(ROOT)
 
     try:
         registry_doc = build_registry(
@@ -983,7 +1154,7 @@ def publish(
         findings.error(str(exc))
         return findings
 
-    editorial_doc = build_editorial(authored_editorial, now)
+    editorial_doc = build_editorial(authored_editorial, now, art, findings)
 
     # The output is held to the PUBLISHED contract, which is stricter than the
     # authored one. This is what catches a resolver that returned a branch name
@@ -1025,12 +1196,14 @@ def publish(
             findings.error(str(exc))
             return findings
 
-    # Icons are added AFTER signing on purpose: they get no sidecar of their own.
-    # Their integrity rides on the digest in the filename, which appears in the
-    # registry document that IS signed -- so one signature covers every icon, and
-    # a client checks a downloaded icon by hashing it against its own path.
+    # Icons and editorial artwork are added AFTER signing on purpose: they get no
+    # sidecar of their own. Their integrity rides on the digest in the filename,
+    # which appears in a document that IS signed -- so one signature covers every
+    # image, and a client checks a download by hashing it against its own path.
     if assets is not None:
         artifacts.update(assets.files)
+    if art is not None:
+        artifacts.update(art.files)
 
     out_dir.mkdir(parents=True, exist_ok=True)
     for filename, payload in artifacts.items():

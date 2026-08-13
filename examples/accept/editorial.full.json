@@ -28,8 +28,27 @@
   "sections": [
     {
       "type": "spotlight",
-      "appRef": "oncall-radar",
-      "blurb": "Every page, shift and handoff on one screen."
+      "appRefs": [
+        "oncall-radar"
+      ],
+      "blurb": "Every page, shift and handoff on one screen.",
+      "artwork": {
+        "ref": "art/spotlight-oncall.png",
+        "refDark": "art/spotlight-oncall-dark.png",
+        "alt": "An on-call dashboard with one active page and a quiet timeline."
+      }
+    },
+    {
+      "type": "spotlight",
+      "title": "Ship a deck before lunch",
+      "appRefs": [
+        "pptx-maker",
+        "oncall-radar"
+      ],
+      "blurb": "A spotlight can hold a group; one app is the same shape with one entry.",
+      "artwork": {
+        "ref": "art/spotlight-collection.webp"
+      }
     },
     {
       "type": "rail",
