@@ -72,17 +72,17 @@ def test_accepts_app_with_category_membership(tmp_path):
     registry = base_registry(app("demo-app"))
     editorial = base_editorial(
         categories=[{"id": "developer-tools", "label": "Developer Tools", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
+        sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
 
-def test_accepts_same_app_in_category_and_rail(tmp_path):
+def test_accepts_same_app_in_category_and_section(tmp_path):
     """A rail is how an app appears twice WITHOUT a second category."""
     registry = base_registry(app("demo-app", categories=["productivity"]))
     editorial = base_editorial(
         categories=[{"id": "productivity", "label": "Productivity", "order": 10}],
-        sections=[{"type": "rail", "title": "Staff picks", "appRefs": ["demo-app"]}],
+        sections=[{"type": "app", "appRef": "demo-app"}],
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
@@ -175,9 +175,164 @@ def test_rejects_duplicate_app_name(tmp_path):
 def test_rejects_dangling_app_ref(tmp_path):
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["ghost-app"]}]
+        sections=[{"type": "app", "appRef": "ghost-app"}]
     )
     assert any("not declared" in e for e in errors_for(tmp_path, base_registry(), editorial))
+
+
+def test_rejects_collection_with_a_multiline_title(tmp_path):
+    """A theme is ONE line of prose.
+
+    HTML collapses a newline to a space, so a multi-line title would validate,
+    sign, and then render as something other than what was authored -- and the
+    part after the break is invisible to anyone reading the source document as
+    lines.
+
+    A TRAILING newline is included deliberately, and it is the case a naively
+    anchored pattern gets wrong: this repository validates through Python, where
+    `$` means end-of-input OR just before a trailing newline, so `"Theme\\n"`
+    satisfies `^[^\\r\\n]*\\S[^\\r\\n]*$` here while failing it under ECMA-262.
+    The constraint survives that difference by keeping `[\\s\\S]*` shoulders, so
+    it asserts containment rather than shape.
+    """
+    registry = base_registry(app("demo-app"), app("other-app"))
+    for title in ("Ship it\nbefore lunch", "Theme\r\nmore", "ok\n\n\nmore", "Theme\n", "Theme\r\n", "\nTheme"):
+        editorial = base_editorial(
+            sections=[
+                {"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]}
+            ]
+        )
+        assert errors_for(tmp_path, registry, editorial) != [], repr(title)
+
+
+def test_accepts_a_title_with_internal_spaces_and_punctuation(tmp_path):
+    """The anchoring must not cost a normal title.
+
+    Guards against the tempting `^\\S+$` spelling, which rejects every title
+    containing a space -- including this schema's own example.
+    """
+    registry = base_registry(app("demo-app"), app("other-app"))
+    for title in ("Ship it before lunch", "On-call & Ops essentials", "Research + writing"):
+        editorial = base_editorial(
+            sections=[
+                {"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]}
+            ]
+        )
+        assert errors_for(tmp_path, registry, editorial) == [], repr(title)
+
+
+def test_rejects_collection_with_a_whitespace_only_title(tmp_path):
+    """`minLength: 1` counts bytes; the client counts visible characters.
+
+    A `" "` title would pass a byte-length check, survive every cross-document
+    check (none of them look at titles), publish -- and then be dropped by the
+    client as unusable. The card would vanish with no error at the gate and
+    nothing in the client's log, which is the exact failure the section
+    description warns about. So the gate refuses it here instead.
+    """
+    registry = base_registry(app("demo-app"), app("other-app"))
+    for title in (" ", "\t", "\n  "):
+        editorial = base_editorial(
+            sections=[
+                {"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]}
+            ]
+        )
+        assert errors_for(tmp_path, registry, editorial) != [], repr(title)
+
+
+def test_rejects_collection_without_a_title(tmp_path):
+    """The theme is the whole reason unrelated apps share a card. Without it a
+    reader has no way to tell why, so an untitled collection is unrepresentable
+    rather than merely discouraged."""
+    editorial = base_editorial(
+        sections=[{"type": "collection", "appRefs": ["demo-app", "other-app"]}]
+    )
+    registry = base_registry(app("demo-app"), app("other-app"))
+    assert errors_for(tmp_path, registry, editorial) != []
+
+
+def test_rejects_collection_of_one(tmp_path):
+    """A one-app collection is an `app` placement wearing a costume. Allowing it
+    would give two spellings for the same card and no reason to prefer either."""
+    editorial = base_editorial(
+        sections=[{"type": "collection", "title": "Picks", "appRefs": ["demo-app"]}]
+    )
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_rejects_app_section_carrying_a_title(tmp_path):
+    """A single-app card is headed by the app's own name. A curator who wants
+    different words is describing a collection, so `title` here is refused
+    instead of being silently ignored by the renderer."""
+    editorial = base_editorial(
+        sections=[{"type": "app", "appRef": "demo-app", "title": "Our pick"}]
+    )
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_rejects_app_section_with_no_ref_at_all(tmp_path):
+    """`appRef` is required, and this is the payload that proves it.
+
+    Isolated on purpose: a section carrying `appRefs` instead would be refused by
+    `additionalProperties` whether or not `appRef` were required, so it could not
+    tell the two constraints apart.
+    """
+    editorial = base_editorial(sections=[{"type": "app"}])
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_rejects_app_section_with_a_ref_list(tmp_path):
+    """`appRefs` on an `app` section is the retired shape. Refusing it means a
+    stale hand-edit fails at publish rather than publishing a card with no app.
+
+    A VALID `appRef` sits beside it, so the only remaining reason to refuse is
+    the retired key itself -- otherwise this would pass on the missing-`appRef`
+    error and never exercise `additionalProperties`.
+    """
+    editorial = base_editorial(
+        sections=[{"type": "app", "appRef": "demo-app", "appRefs": ["demo-app"]}]
+    )
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_rejects_collection_larger_than_the_card_can_draw(tmp_path):
+    """Every member is rendered -- there is no collection detail page to hold an
+    overflow. A cap above what the card draws would silently discard members
+    that validated and published."""
+    names = [f"app-{i}" for i in range(7)]
+    editorial = base_editorial(
+        sections=[{"type": "collection", "title": "Too many", "appRefs": names}]
+    )
+    assert errors_for(tmp_path, base_registry(*(app(n) for n in names)), editorial) != []
+
+
+def test_rejects_retired_section_types(tmp_path):
+    """`rail` and `banner` were schema entries with no renderer, so a published
+    one vanished into the reader's skip path and looked like a bug. They are
+    gone; a document still using them fails the gate."""
+    for retired in (
+        {"type": "rail", "title": "Staff picks", "appRefs": ["demo-app"]},
+        {"type": "banner", "md": "New this week"},
+    ):
+        editorial = base_editorial(sections=[retired])
+        assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != [], retired
+
+
+def test_accepts_a_collection_of_two(tmp_path):
+    """The smallest legitimate collection. Guards the minItems boundary from
+    being raised past what curators actually author."""
+    registry = base_registry(app("demo-app"), app("other-app"))
+    editorial = base_editorial(
+        sections=[
+            {
+                "type": "collection",
+                "title": "Ship it before lunch",
+                "appRefs": ["demo-app", "other-app"],
+                "blurb": "Two tools, one afternoon.",
+            }
+        ]
+    )
+    assert errors_for(tmp_path, registry, editorial) == []
 
 
 def test_accepts_a_secondary_category_but_says_it_does_not_place_the_app(tmp_path):
@@ -258,7 +413,7 @@ def test_rejects_reference_to_tombstoned_app(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
+        sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -282,7 +437,7 @@ def test_reinstated_app_may_be_referenced_again(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
+        sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
@@ -296,7 +451,7 @@ def test_removal_newer_than_reinstatement_still_tombstoned(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
+        sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -314,17 +469,24 @@ def test_same_day_reinstatement_fails_closed(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
+        sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
 
-def test_rejects_non_https_cta(tmp_path):
-    """A curated feed must not be able to point the client at other schemes."""
+def test_rejects_a_section_carrying_an_arbitrary_url(tmp_path):
+    """No section variant accepts a URL any more.
+
+    `banner` was the only one that did, through `cta.href` with an `^https://`
+    pattern, and it is gone. This asserts the property that replaced that gate --
+    a curated feed cannot point the client anywhere at all, because no surviving
+    variant has a field for it -- rather than leaving behind a test that names
+    URL-scheme coverage the schema no longer contains.
+    """
     editorial = base_editorial(
-        sections=[{"type": "banner", "md": "hi", "cta": {"label": "Go", "href": "javascript:alert(1)"}}]
+        sections=[{"type": "app", "appRef": "demo-app", "cta": {"href": "https://ok.example"}}]
     )
-    assert errors_for(tmp_path, base_registry(), editorial) != []
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
 
 
 # --------------------------------------------------------------------------
@@ -410,7 +572,7 @@ def test_bogus_reinstatement_date_is_rejected(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
+        sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert errors_for(tmp_path, registry, editorial) != []
 
@@ -432,7 +594,7 @@ def test_cross_document_layer_fails_closed_on_a_bogus_date():
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app"]}]
+        sections=[{"type": "app", "appRef": "demo-app"}]
     )
     findings = Findings()
     check_cross_document(registry, editorial, findings)
@@ -526,12 +688,14 @@ def test_requires_category_order(tmp_path):
     assert errors_for(tmp_path, base_registry(), editorial) != []
 
 
-def test_duplicate_ref_in_one_rail_is_still_a_single_app(tmp_path):
-    """A rail listing the same app twice is a curator slip, not two apps."""
+def test_duplicate_ref_in_one_collection_is_still_a_single_app(tmp_path):
+    """A collection listing the same app twice is a curator slip, not two apps."""
     registry = base_registry(app("demo-app", categories=["dev"]))
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "rail", "title": "Picks", "appRefs": ["demo-app", "demo-app"]}]
+        sections=[
+            {"type": "collection", "title": "Picks", "appRefs": ["demo-app", "demo-app"]}
+        ]
     )
     assert errors_for(tmp_path, registry, editorial) != []
 

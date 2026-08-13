@@ -27,10 +27,8 @@
   ],
   "sections": [
     {
-      "type": "spotlight",
-      "appRefs": [
-        "oncall-radar"
-      ],
+      "type": "app",
+      "appRef": "oncall-radar",
       "blurb": "Every page, shift and handoff on one screen.",
       "artwork": {
         "ref": "art/spotlight-oncall.png",
@@ -39,31 +37,15 @@
       }
     },
     {
-      "type": "spotlight",
+      "type": "collection",
       "title": "Ship a deck before lunch",
       "appRefs": [
         "pptx-maker",
         "oncall-radar"
       ],
-      "blurb": "A spotlight can hold a group; one app is the same shape with one entry.",
+      "blurb": "A theme is what makes two unrelated apps belong on one card.",
       "artwork": {
         "ref": "art/spotlight-collection.webp"
-      }
-    },
-    {
-      "type": "rail",
-      "title": "Staff picks",
-      "appRefs": [
-        "pptx-maker",
-        "oncall-radar"
-      ]
-    },
-    {
-      "type": "banner",
-      "md": "New this week: **Channels** — reach your crew from Slack, Discord or Telegram.",
-      "cta": {
-        "label": "Learn more",
-        "href": "https://crew.kiro.dev/docs/channels"
       }
     }
   ]
