@@ -95,7 +95,20 @@
           "maxItems": 16
         },
         "version": { "type": "string", "maxLength": 64 },
-        "iconRef": { "type": "string" },
+        "iconRef": {
+          "description": "Path to the app's icon, never a URL. A builtin names an absolute client-local path (/app-assets/<app>/icon.svg) whose bytes it already ships. Every other source's icon is INGESTED at publish time and this is a catalog-relative content-addressed path (assets/icons/<sha256>.<ext>): the filename IS the digest of the bytes, and it appears in this signed document, so a client that verifies the signature and then hashes what it downloaded has end-to-end integrity for every icon from one signature. Hosting the bytes also takes the publisher's repository off the render path, which is what a per-icon clone through a proxy used to require.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+        },
+        "iconRefDark": {
+          "description": "Optional dark-appearance variant of iconRef, same shape rules. Raster art has fixed bytes, so an app that must read well on both backgrounds ships two files; a builtin's inline SVG repaints from theme tokens and needs none.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+        },
         "heroRef": { "type": "string" }
       }
     },

@@ -59,13 +59,27 @@ def git(*args: str, cwd: Path) -> str:
     return proc.stdout.strip()
 
 
-def make_repo(path: Path, manifest: dict, subdir: str | None = None) -> str:
-    """Create a real one-commit repo containing app.json. Returns the commit."""
+def make_repo(
+    path: Path,
+    manifest: dict,
+    subdir: str | None = None,
+    extra: dict[str, bytes] | None = None,
+) -> str:
+    """Create a real one-commit repo containing app.json. Returns the commit.
+
+    *extra* adds files by repo-relative path, so a test can commit real BINARY
+    content (an icon) and exercise the byte-exact read path rather than stubbing
+    it -- a text-mode `git show` would corrupt those bytes silently.
+    """
     path.mkdir(parents=True, exist_ok=True)
     git("init", "--quiet", "-b", "main", ".", cwd=path)
     target = path / subdir if subdir else path
     target.mkdir(parents=True, exist_ok=True)
     (target / "app.json").write_text(json.dumps(manifest), encoding="utf-8")
+    for rel, payload in (extra or {}).items():
+        dest = path / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload)
     git("add", "-A", cwd=path)
     git("commit", "--quiet", "-m", "init", cwd=path)
     return git("rev-parse", "HEAD", cwd=path)
@@ -196,8 +210,124 @@ def test_bakes_generated_fields():
     assert entry["author"] == {"name": "Demo Labs"}
     assert entry["tags"] == ["dev", "demo"]
     assert entry["version"] == "1.2.3"
-    assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
+    # MANIFEST names its icon with an ABSOLUTE `iconUrl`, which only a builtin
+    # may do. This entry is a git source, so the icon is read from `iconPath`
+    # (absent here) -- and because the publisher clearly meant to ship an icon,
+    # the run says which key this source type reads instead of going quiet.
+    # `heroRef` still reads `heroImage` unconditionally: that field has not been
+    # through this treatment yet.
+    assert "iconRef" not in entry
+    assert any("reads iconPath" in w for w in findings.warnings)
     assert entry["heroRef"] == "/app-assets/demo-app/hero.svg"
+
+
+class TestBakesIconRefs:
+    """Which manifest key an icon is read from depends on the SOURCE TYPE.
+
+    A builtin resolves from the client's own inventory, so it names an absolute
+    client-local path whose bytes it already ships. Everything else is fetched
+    from a repository we do not control, so only a repo-relative path is read --
+    the client rewrites that onto its own proxy, which is what keeps the
+    extension allowlist and the trusted-host gate in the fetch path.
+    """
+
+    def test_builtin_reads_the_absolute_icon_url(self):
+        findings = Findings()
+        entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, findings)
+        assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
+        assert findings.warnings == []
+
+    def test_builtin_dark_variant_is_published(self):
+        manifest = {**MANIFEST, "iconUrlDark": "/app-assets/demo-app/icon-dark.svg"}
+        entry = publish.bake_entry(BUILTIN, manifest, "b" * 40, Findings())
+        assert entry["iconRefDark"] == "/app-assets/demo-app/icon-dark.svg"
+
+    def test_git_reads_the_repo_relative_icon_path(self):
+        """The bug this closes: a fetched app declares `iconPath`, so reading
+        only `iconUrl` published NO icon for every third-party entry."""
+        findings = Findings()
+        manifest = {**MANIFEST, "iconPath": "assets/icon.png"}
+        del manifest["iconUrl"]
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert entry["iconRef"] == "assets/icon.png"
+        assert findings.warnings == []
+
+    def test_git_dark_variant_is_published(self):
+        manifest = {**MANIFEST, "iconPathDark": "assets/icon-dark.png"}
+        del manifest["iconUrl"]
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings())
+        assert entry["iconRefDark"] == "assets/icon-dark.png"
+
+    def test_absent_icon_publishes_no_key(self):
+        """Absence must not publish an empty string: a falsy ref would still be
+        a key the client has to special-case, and it widens every entry."""
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings())
+        assert "iconRef" not in entry
+        assert "iconRefDark" not in entry
+
+    def test_truly_iconless_app_warns_about_nothing(self):
+        """The wrong-key warning must not fire for an app that simply has no
+        icon, or every such app would carry a spurious finding."""
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert not any("icon" in w.lower() for w in findings.warnings)
+
+    def test_wrong_key_for_the_source_type_is_named(self):
+        """A publisher who used the other source type's key gets told which key
+        this one reads. Silence would read as "the catalog dropped my icon"."""
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "assets/i.png"
+        publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
+        assert any("reads iconUrl" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://evil.example/track.png",
+            "http://evil.example/track.png",
+            "//evil.example/track.png",
+            "javascript:alert(1)",
+            "data:image/svg+xml;base64,AAAA",
+            "/etc/passwd",
+            "../../etc/passwd",
+            "assets/../../etc/passwd",
+            "assets/icon.png?ref=track",
+            "assets/ icon.png",
+        ],
+    )
+    def test_fetched_manifest_may_not_name_an_absolute_or_escaping_location(self, value):
+        """A fetched manifest is untrusted content. Publishing an absolute value
+        out of it would put a publisher-chosen host into a document WE sign, and
+        the store would then load it."""
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(), {**MANIFEST, "iconPath": value}, "a" * 40, findings
+        )
+        assert "iconRef" not in entry, value
+        assert findings.errors == [], "one bad icon must not halt the release"
+        assert any("iconPath" in w for w in findings.warnings)
+
+    def test_builtin_relative_icon_is_refused(self):
+        """The asymmetry runs both ways: a builtin's ref is resolved by the
+        client against its own served root, so a relative value would silently
+        resolve somewhere else entirely."""
+        findings = Findings()
+        manifest = {**MANIFEST, "iconUrl": "assets/icon.png"}
+        entry = publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
+        assert "iconRef" not in entry
+        assert any("absolute client-local path" in w for w in findings.warnings)
+
+    def test_non_string_icon_degrades_without_raising(self):
+        """Same totality rule as every other display field: nothing read from an
+        app.json may halt the run."""
+        entry = publish.bake_entry(
+            authored(), {**MANIFEST, "iconPath": {"nope": 1}}, "a" * 40, Findings()
+        )
+        assert "iconRef" not in entry
+
 
 
 def test_bake_rejects_name_disagreement():
@@ -930,7 +1060,14 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
     tmp_path, allow_local_urls, monkeypatch
 ):
     repo = tmp_path / "repo"
-    commit = make_repo(repo, MANIFEST)
+    # A real icon committed as real bytes: this is the only place the byte-exact
+    # read through `git show` runs for real. It deliberately contains every byte
+    # value, which a text-mode read would mangle.
+    icon = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR" + (512).to_bytes(4, "big") * 2
+    icon += bytes(range(256)) * 2
+    manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+    manifest["iconPath"] = "assets/icon.png"
+    commit = make_repo(repo, manifest, extra={"assets/icon.png": icon})
 
     catalog = tmp_path / "catalog"
     catalog.mkdir()
@@ -1008,3 +1145,444 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
         sidecar = json.loads((out / f"{name}.sig").read_text())
         assert sidecar["payloadSha256"] == hashlib.sha256(payload).hexdigest()
         verify_rsa(kms.public_der(), base64.b64decode(sidecar["signature"]), payload)
+
+    # The icon was INGESTED: the entry names a path under our own root, the file
+    # is on disk byte-for-byte, and its name is the digest of those bytes.
+    digest = hashlib.sha256(icon).hexdigest()
+    assert entry["iconRef"] == f"assets/icons/{digest}.png"
+    hosted = out / entry["iconRef"]
+    assert hosted.read_bytes() == icon, "a text-mode read would corrupt these bytes"
+    # No sidecar of its own: integrity rides on the digest in the filename, which
+    # lives inside the registry document that IS signed. One signature, every
+    # icon covered -- and a client checks an icon by hashing what it downloaded.
+    assert not (out / f"{entry['iconRef']}.sig").exists()
+
+
+# ---------------------------------------------------------------------------
+# The catalog HOSTS icon bytes
+# ---------------------------------------------------------------------------
+#
+# Before this, a third-party icon stayed in the publisher's repository and every
+# client fetched it by cloning that repository through a proxy: one shallow clone
+# per uncached image, no byte cap, a cache keyed on a moving branch, and a grid
+# that broke when a repo was renamed or made private. Hosting the bytes takes the
+# publisher's infrastructure out of the render path.
+
+
+def png_bytes(width: int, height: int, filler: bytes = b"\x00" * 32) -> bytes:
+    """A byte string with a REAL PNG header. Only the header is ever parsed."""
+    ihdr = width.to_bytes(4, "big") + height.to_bytes(4, "big")
+    return b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\r" + b"IHDR" + ihdr + filler
+
+
+def reader_for(files: dict[str, bytes]):
+    def read(url: str, commit: str, path: str) -> bytes:
+        if path not in files:
+            raise publish.PublishError(f"cannot read {path}")
+        return files[path]
+
+    return read
+
+
+class TestIconIngestion:
+    def test_stores_bytes_under_their_own_digest(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"a/i.png": data}))
+        findings = Findings()
+        ref = assets.add("https://x/y.git", "a" * 40, "a/i.png", "demo", findings)
+        digest = hashlib.sha256(data).hexdigest()
+        assert ref == f"assets/icons/{digest}.png"
+        assert assets.files[ref] == data
+        assert findings.warnings == []
+
+    def test_the_digest_in_the_path_is_the_digest_of_the_bytes(self):
+        """This is the whole integrity story: the path is inside the SIGNED
+        document, so a client hashing the file it downloaded against its own path
+        gets end-to-end integrity from one signature over one document."""
+        data = png_bytes(512, 512, b"\x11" * 64)
+        assets = publish.IconAssets(reader_for({"i.png": data}))
+        ref = assets.add("https://x/y.git", "a" * 40, "i.png", "demo", Findings())
+        assert Path(ref).stem == hashlib.sha256(assets.files[ref]).hexdigest()
+
+    def test_identical_bytes_converge_on_one_file(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"one.png": data, "two.png": data}))
+        findings = Findings()
+        first = assets.add("https://x/y.git", "a" * 40, "one.png", "app-one", findings)
+        second = assets.add("https://x/y.git", "a" * 40, "two.png", "app-two", findings)
+        assert first == second
+        assert len(assets.files) == 1
+
+    @pytest.mark.parametrize("path", ["i.exe", "i.html", "i.gif", "i", "i.PNG.txt"])
+    def test_refuses_a_type_the_catalog_will_not_host(self, path):
+        assets = publish.IconAssets(reader_for({path: png_bytes(512, 512)}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, path, "demo", findings) is None
+        assert assets.files == {}
+        assert any("does not host" in w for w in findings.warnings)
+
+    def test_refuses_an_oversized_icon(self):
+        big = png_bytes(512, 512, b"\x00" * (publish.ICON_MAX_BYTES + 1))
+        assets = publish.IconAssets(reader_for({"i.png": big}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert any("over the" in w for w in findings.warnings)
+
+    def test_refuses_an_empty_icon(self):
+        assets = publish.IconAssets(reader_for({"i.png": b""}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert any("is empty" in w for w in findings.warnings)
+
+    def test_an_unreadable_icon_warns_rather_than_raising(self):
+        """One missing file must not halt every other app's release."""
+        assets = publish.IconAssets(reader_for({}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert findings.errors == []
+        assert any("cannot read icon" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize(
+        "svg",
+        [
+            b"<svg><script>alert(1)</script></svg>",
+            b"<svg:svg><svg:script>alert(1)</svg:script></svg:svg>",  # namespace prefix
+            "<svg><script>alert(1)</script></svg>".encode("utf-16-le"),  # NUL-interleaved
+            b'<svg><a href="&#106;avascript:alert(1)">x</a></svg>',  # entity-encoded scheme
+            b'<svg onload="alert(1)"></svg>',
+            b"<svg><foreignObject><body/></foreignObject></svg>",
+            b'<svg viewBox="0 0 24 24"><path d="M1 1h22v22H1z"/></svg>',  # entirely benign
+        ],
+    )
+    def test_svg_is_not_hosted_at_all(self, svg):
+        """Raster only, and that is a DECISION rather than an omission.
+
+        An earlier revision screened SVG text with a regex. Review defeated it
+        three separate ways -- a namespace prefix, a UTF-16 encoding whose ASCII
+        pattern never matches across interleaved NULs, and an entity-encoded
+        scheme in an href. Each is individually fixable and the next one is not:
+        a regex over untrusted XML loses to the parser that actually matters,
+        which is the browser's. So the capability is gone, not patched -- note
+        the benign case is refused too, which is what makes this a rule rather
+        than a filter.
+        """
+        assets = publish.IconAssets(reader_for({"i.svg": svg}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.svg", "demo", findings) is None
+        assert assets.files == {}
+        assert any("does not host" in w for w in findings.warnings)
+
+    def test_dimension_check_is_skipped_for_formats_it_cannot_measure(self):
+        """`png_dimensions` reads a PNG header; a webp has none to read, so the
+        shape advice is skipped rather than guessed at."""
+        assets = publish.IconAssets(reader_for({"i.webp": b"RIFF....WEBPVP8 "}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.webp", "demo", findings)
+        assert findings.warnings == []
+
+    def test_the_cap_is_checked_before_the_bytes_are_read(self):
+        """The read buffers the whole object, so a cap applied afterwards never
+        fires on the input it exists for: a repository could hand the publisher a
+        multi-gigabyte file and kill the run before the check it would fail."""
+        reads = []
+
+        def reader(url, commit, path):
+            reads.append(path)
+            return b"never reached"
+
+        assets = publish.IconAssets(reader, lambda u, c, p: publish.ICON_MAX_BYTES + 1)
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert reads == [], "the oversized object must not be read"
+        assert any("over the" in w for w in findings.warnings)
+
+    def test_a_size_probe_failure_warns_rather_than_raising(self):
+        def sizer(url, commit, path):
+            raise publish.PublishError("no such object")
+
+        assets = publish.IconAssets(reader_for({"i.png": png_bytes(512, 512)}), sizer)
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert findings.errors == []
+        assert any("cannot size icon" in w for w in findings.warnings)
+
+    def test_a_within_cap_size_probe_lets_the_read_proceed(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"i.png": data}), lambda u, c, p: len(data))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings)
+        assert findings.warnings == []
+
+    def test_a_non_square_png_is_published_with_a_warning(self):
+        """Shape is advice, not a gate: a card with a slightly wrong aspect beats
+        a card with no icon."""
+        assets = publish.IconAssets(reader_for({"i.png": png_bytes(512, 256)}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings)
+        assert any("not square" in w for w in findings.warnings)
+
+    def test_a_small_square_png_warns_about_the_floor(self):
+        assets = publish.IconAssets(reader_for({"i.png": png_bytes(64, 64)}))
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings)
+        assert any("floor" in w for w in findings.warnings)
+
+    def test_png_dimensions_returns_none_for_anything_else(self):
+        assert publish.png_dimensions(b"not a png") is None
+        assert publish.png_dimensions(b"") is None
+        assert publish.png_dimensions(b"\x89PNG\r\n\x1a\n" + b"\x00" * 4) is None
+
+
+class TestBakeEntryHostsFetchedIcons:
+    def test_a_fetched_icon_becomes_a_hosted_path(self):
+        data = png_bytes(512, 512)
+        assets = publish.IconAssets(reader_for({"assets/icon.png": data}))
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "assets/icon.png"
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings(), assets)
+        assert entry["iconRef"] == f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
+        assert assets.files
+
+    def test_a_builtin_icon_is_not_ingested(self):
+        """The client already ships those bytes. Hosting a second copy would add
+        download weight and a second source of truth."""
+        assets = publish.IconAssets(reader_for({}))
+        entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings(), assets)
+        assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
+        assert assets.files == {}
+
+    def test_a_refused_icon_leaves_the_field_off_the_entry(self):
+        """Not an empty string: a falsy ref is still a key every client has to
+        special-case."""
+        assets = publish.IconAssets(reader_for({}))
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "assets/missing.png"
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings(), assets)
+        assert "iconRef" not in entry
+
+    def test_both_appearances_are_ingested(self):
+        light = png_bytes(512, 512, b"\x01" * 32)
+        dark = png_bytes(512, 512, b"\x02" * 32)
+        assets = publish.IconAssets(reader_for({"i.png": light, "i-dark.png": dark}))
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = "i.png"
+        manifest["iconPathDark"] = "i-dark.png"
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, Findings(), assets)
+        assert entry["iconRef"] != entry["iconRefDark"]
+        assert len(assets.files) == 2
+
+
+# ---------------------------------------------------------------------------
+# verify_dist closes the last link of the integrity chain
+# ---------------------------------------------------------------------------
+#
+# An icon carries no signature. Its integrity rides on being content-addressed:
+# the filename IS the sha256 of the bytes, and that filename lives in the signed
+# registry document. So the chain is signature -> document -> path -> bytes, and
+# verify_dist is both the pre-upload gate for the last link and the reference
+# implementation of what a client must do after downloading an icon.
+
+
+def dist_with_icon(tmp_path, ref: str, data: bytes, on_disk: bytes | None = None):
+    """A dist dir holding one entry naming *ref*, with *on_disk* bytes stored."""
+    dist = tmp_path / "dist"
+    (dist / "assets" / "icons").mkdir(parents=True)
+    (dist / "official-registry.json").write_text(
+        json.dumps({"schemaVersion": 1, "apps": [{"name": "demo-app", "iconRef": ref}]})
+    )
+    if on_disk is not None:
+        (dist / ref).write_bytes(on_disk)
+    return dist
+
+
+def test_verify_dist_accepts_a_matching_icon_digest(tmp_path):
+    from verify_dist import verify_hosted_icons
+
+    data = b"\x89PNG\r\n\x1a\nwhatever"
+    ref = f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
+    assert verify_hosted_icons(dist_with_icon(tmp_path, ref, data, data)) == []
+
+
+def test_verify_dist_catches_bytes_that_do_not_match_their_digest(tmp_path):
+    """The case the whole scheme exists to catch: a document naming one digest
+    while the served bytes are something else. Undetectable to a client that
+    skips this check, which is why it is code and not a sentence in the schema."""
+    from verify_dist import verify_hosted_icons
+
+    honest = b"\x89PNG\r\n\x1a\nhonest"
+    ref = f"assets/icons/{hashlib.sha256(honest).hexdigest()}.png"
+    problems = verify_hosted_icons(dist_with_icon(tmp_path, ref, honest, b"swapped"))
+    assert len(problems) == 1
+    assert "bytes hash to" in problems[0]
+
+
+def test_verify_dist_catches_a_missing_icon(tmp_path):
+    from verify_dist import verify_hosted_icons
+
+    data = b"\x89PNG\r\n\x1a\ngone"
+    ref = f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
+    problems = verify_hosted_icons(dist_with_icon(tmp_path, ref, data, None))
+    assert len(problems) == 1
+    assert "is not in" in problems[0]
+
+
+def test_verify_dist_ignores_a_builtin_client_local_ref(tmp_path):
+    """Those bytes ship with the client, so there is nothing in dist to check."""
+    from verify_dist import verify_hosted_icons
+
+    dist = dist_with_icon(tmp_path, "/app-assets/demo-app/icon.svg", b"", None)
+    assert verify_hosted_icons(dist) == []
+
+
+def test_verify_dist_is_quiet_when_there_is_no_registry(tmp_path):
+    from verify_dist import verify_hosted_icons
+
+    (tmp_path / "empty").mkdir()
+    assert verify_hosted_icons(tmp_path / "empty") == []
+
+
+# ---------------------------------------------------------------------------
+# publish and the schema must enforce the SAME asset-ref rule
+# ---------------------------------------------------------------------------
+#
+# A value publish accepts and the schema rejects does not degrade one field: it
+# reaches check_schema on the ASSEMBLED document, and those errors withhold the
+# ENTIRE catalog publish. So one app's odd icon path would block every other
+# app's release -- the opposite of the totality rule every other baked field
+# follows. Pinning the two together is the fix; patching individual cases is not.
+
+
+def test_publish_and_schema_agree_on_the_asset_ref_rule():
+    schema = json.loads(
+        (publish.SCHEMA_DIR / "official-registry.schema.json").read_text(encoding="utf-8")
+    )
+    props = schema["$defs"]["entry"]["properties"]
+    for field in ("iconRef", "iconRefDark"):
+        assert props[field]["pattern"] == publish.ASSET_REF_PATTERN, field
+        assert props[field]["maxLength"] == publish.ASSET_REF_MAX, field
+
+
+class TestAssetRefRuleMatchesTheSchema:
+    """Values that pass publish must also pass the published schema."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "//app-assets/x.svg",  # looks absolute, is protocol-relative
+            "///app-assets/x.svg",
+            "/" + "a" * publish.ASSET_REF_MAX + ".svg",  # over maxLength
+        ],
+    )
+    def test_builtin_refs_the_schema_would_reject_are_refused(self, value):
+        findings = Findings()
+        entry = publish.bake_entry(
+            BUILTIN, {**MANIFEST, "iconUrl": value}, "b" * 40, findings
+        )
+        assert "iconRef" not in entry, value
+        assert findings.errors == [], "one odd path must not halt the run"
+        assert any("iconUrl" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize(
+        "value",
+        ["a" * (publish.ASSET_REF_MAX + 1) + ".png", "assets/" + "b" * 600 + ".png"],
+    )
+    def test_over_long_fetched_refs_are_refused(self, value):
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = value
+        entry = publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert "iconRef" not in entry
+        assert findings.errors == []
+
+    def test_every_accepted_ref_validates_against_the_published_schema(self):
+        """The property that matters, checked end to end rather than by eye: bake
+        a builtin and a fetched entry with the longest legal refs and run the real
+        published-schema validator over the assembled document."""
+        from validate import Findings as VFindings
+        from validate import check_schema
+
+        longest_abs = "/" + "a" * (publish.ASSET_REF_MAX - 1)
+        longest_rel = "a" * publish.ASSET_REF_MAX
+        builtin = publish.bake_entry(
+            BUILTIN, {**MANIFEST, "iconUrl": longest_abs}, "b" * 40, Findings()
+        )
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        manifest["iconPath"] = longest_rel
+        fetched = publish.bake_entry(authored(), manifest, "a" * 40, Findings())
+        assert builtin["iconRef"] == longest_abs
+        assert fetched["iconRef"] == longest_rel
+
+        vf = VFindings()
+        check_schema(
+            {
+                "schemaVersion": 1,
+                "generatedAt": "2026-01-01T00:00:00Z",
+                "revision": "2026-01-01T00:00:00Z-abcdef1",
+                "apps": [builtin, {**fetched, "source": {"type": "builtin"}}],
+            },
+            publish.SCHEMA_DIR / "official-registry.schema.json",
+            "official-registry.json",
+            vf,
+        )
+        assert vf.errors == [], vf.errors
+
+
+# ---------------------------------------------------------------------------
+# Hosted icons must be uploaded with an image content type
+# ---------------------------------------------------------------------------
+#
+# `aws s3 sync --content-type` applies ONE value to every object a call uploads.
+# The document sync forces application/json, so an icon riding along in that call
+# reaches clients as JSON and an <img> refuses to render it. The fix is a
+# separate pass per extension, which only holds while the two lists agree.
+
+
+def test_asset_upload_covers_every_extension_publish_will_host():
+    script = (
+        publish.ROOT / ".github" / "scripts" / "upload-assets.sh"
+    ).read_text(encoding="utf-8")
+    for ext in publish.ICON_EXT_ALLOWED:
+        assert f'upload "*{ext}"' in script, ext
+
+
+def test_document_syncs_exclude_the_asset_directory():
+    """Without the exclude, icons are uploaded twice and the JSON-typed pass may
+    be the one that wins."""
+    workflow = (
+        publish.ROOT / ".github" / "workflows" / "s3-publish.yml"
+    ).read_text(encoding="utf-8")
+    json_syncs = [
+        line for line in workflow.splitlines() if "--content-type \"application/json\"" in line
+    ]
+    assert len(json_syncs) == 2, "expected the revision and pointer syncs"
+    assert workflow.count('--exclude "assets/*"') == len(json_syncs)
+
+
+def test_assets_are_uploaded_before_the_document_that_names_them():
+    """The document is the only thing that makes an icon reachable.
+
+    Publishing it first opens a window where a client resolves a path whose
+    bytes are not there yet, and if the asset step then fails the signed
+    document is already live pointing at a 404. Uploading first is safe in a way
+    the reverse is not: the filename is the sha256 of the contents, so an asset
+    nothing references yet is inert and re-uploading is idempotent.
+
+    Both destinations are checked -- the immutable revision and the rolling
+    pointer -- because they publish the same document to two prefixes.
+    """
+    workflow = (
+        publish.ROOT / ".github" / "workflows" / "s3-publish.yml"
+    ).read_text(encoding="utf-8")
+    lines = workflow.splitlines()
+    assets = [i for i, ln in enumerate(lines) if "upload-assets.sh" in ln]
+    documents = [
+        i for i, ln in enumerate(lines) if 'aws s3 sync dist "s3://' in ln
+    ]
+    assert len(assets) == 2, "expected the revision and pointer asset uploads"
+    assert len(documents) == 2, "expected the revision and pointer document syncs"
+    for asset_line, document_line in zip(assets, documents):
+        assert asset_line < document_line, (
+            "upload-assets.sh must run BEFORE the document sync that references "
+            f"the icons (asset upload at line {asset_line + 1}, document sync at "
+            f"line {document_line + 1})"
+        )
