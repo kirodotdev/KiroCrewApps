@@ -73,11 +73,27 @@ A dedicated hostname means no prefix; keys sit at the root.
 /editorial.json.sig
 /keys/*.pub                             <- verification keys
 /revisions/<revision>/…                 <- immutable copies, cached hard
+/assets/icons/<sha256>.<ext>            <- hosted third-party app icons
+/assets/editorial/<sha256>.<ext>        <- hosted editorial artwork
 /app-assets/…                           <- RESERVED, see below
 ```
 
 Clients fetch the root paths. The per-revision copies exist so a publish can be
 audited or pinned after the fact.
+
+`/assets/` holds image bytes the catalog hosts rather than links to. Both lanes
+are content-addressed: the filename IS the sha256 of the bytes, and that
+filename appears in a document that is signed — so one signature covers every
+image, and a client verifies a download by hashing it against its own path. The
+URL is therefore immutable and cacheable forever, and two entries shipping the
+same file converge on one object.
+
+The two lanes differ only in where the bytes come from. An icon under
+`assets/icons/` is read from the app author's repository at the pinned commit;
+artwork under `assets/editorial/` is a file a curator committed to THIS
+repository, referenced from a section as a repo-relative path (`art/hero.png`)
+that the publish step replaces with the hosted path. `tools/verify_dist.py`
+checks both before anything is uploaded.
 
 `/app-assets/` is reserved, not yet used: app manifests already carry
 `iconUrl` and `heroImage` values like `/app-assets/<app>/icon.svg`, and this

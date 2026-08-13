@@ -68,8 +68,37 @@
       }
     },
 
+    "artwork": {
+      "description": "Editorial artwork for a section, authored by the CURATOR and hosted by the catalog. Shared across every section variant on purpose: artwork is orthogonal to what a section contains, so a future variant inherits it without touching this definition. Raster only -- an SVG is a script host, and a regex screen over untrusted XML was defeated three separate ways.\n\nTWO FORMS, ONE FIELD. Authored, `ref` is a path to a file in THIS repository (`art/spotlight-tasks.png`) -- the curator cannot know a digest that does not exist until publish runs. Published, the same key holds the content-addressed path the publish step emitted (`assets/editorial/<sha256>.png`), whose digest is covered by the document signature and is what gives a client end-to-end integrity for bytes carrying no signature of their own. The pattern below admits both because one schema validates both stages; `verify_dist` is what proves the published form is the addressed one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref"],
+      "properties": {
+        "ref": {
+          "description": "Light-appearance artwork. Required when `artwork` is present at all: a dark-only section would render nothing on the default appearance.",
+          "$ref": "#/$defs/assetRef"
+        },
+        "refDark": {
+          "description": "Optional dark-appearance variant. Absent means the light bytes are reused, which is why the light one is opaque by requirement.",
+          "$ref": "#/$defs/assetRef"
+        },
+        "alt": {
+          "description": "Accessible description. Absent is allowed and means the artwork is decorative -- the section's own title and blurb already name the content, so an empty alt is correct rather than lazy.",
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+
+    "assetRef": {
+      "description": "A relative path, never an absolute URL and never a traversal: a curated feed must not be able to point the client's renderer at a third-party host, and the publish step must not be able to read outside the repository. Lowercase, single dots only, one extension.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*)*\\.[a-z0-9]+$",
+      "maxLength": 128
+    },
+
     "section": {
-      "description": "Closed per known variant, but the CLIENT must skip an unrecognized `type` rather than reject the document. Validating strictly here is for the publish gate; the reader is deliberately more tolerant.",
+      "description": "Closed per known variant, but the CLIENT must skip an unrecognized `type` rather than reject the document. Validating strictly here is for the publish gate; the reader is deliberately more tolerant.\n\nEXTENDING THIS. A new presentation shape gets a NEW `type` value, never a sub-discriminator inside an existing variant: the client-side rule above makes an unknown `type` safe (skipped until support ships), whereas a flag inside `spotlight` would make every older client render the new shape as a broken old one. Cardinality is NOT a reason to add a type -- `appRefs` already covers one app or a group.",
       "type": "object",
       "oneOf": [
         { "$ref": "#/$defs/sectionSpotlight" },
@@ -79,14 +108,27 @@
     },
 
     "sectionSpotlight": {
-      "title": "spotlight -- single hero app",
+      "title": "spotlight -- hero placement for one app or a group",
+      "description": "`appRefs` is a LIST even when it holds one entry: a single spotlight is the degenerate case of a group, so promoting one app to a collection is a data edit rather than a new section type and a second client code path. `title` is what a group needs and a single app does not, which is why it is optional here but required on `rail`.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "appRef"],
+      "required": ["type", "appRefs"],
       "properties": {
         "type": { "const": "spotlight" },
-        "appRef": { "$ref": "#/$defs/appRef" },
-        "blurb": { "type": "string", "maxLength": 200 }
+        "appRefs": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/appRef" },
+          "minItems": 1,
+          "maxItems": 20
+        },
+        "title": {
+          "description": "Names the group. Omit for a single-app spotlight, where the app's own name is the heading.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "blurb": { "type": "string", "maxLength": 200 },
+        "artwork": { "$ref": "#/$defs/artwork" }
       }
     },
 
@@ -104,7 +146,8 @@
           "items": { "$ref": "#/$defs/appRef" },
           "minItems": 1,
           "maxItems": 20
-        }
+        },
+        "artwork": { "$ref": "#/$defs/artwork" }
       }
     },
 
@@ -132,7 +175,8 @@
               "pattern": "^https://"
             }
           }
-        }
+        },
+        "artwork": { "$ref": "#/$defs/artwork" }
       }
     }
   }

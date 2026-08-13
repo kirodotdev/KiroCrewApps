@@ -157,6 +157,7 @@ def verify_dir(dist: Path, keys: dict[str, bytes] | None = None) -> list[str]:
         print(f"verified {doc.name} ({len(payload)} bytes, {algorithm}, key {key_id})")
 
     problems.extend(verify_hosted_icons(dist))
+    problems.extend(verify_hosted_artwork(dist))
     return problems
 
 
@@ -210,6 +211,62 @@ def verify_hosted_icons(dist: Path) -> list[str]:
             checked += 1
     if checked:
         print(f"verified {checked} hosted icon(s) against their content digests")
+    return problems
+
+
+def verify_hosted_artwork(dist: Path) -> list[str]:
+    """Check every hosted editorial image against the digest in its own filename.
+
+    Same chain as the icons above -- signature -> document -> path -> bytes --
+    applied to the editorial document instead of the registry. Written as a
+    second pass over a second document rather than folded into the first,
+    because the two documents are signed separately and a client that reads only
+    one must still get a complete story for the images that document names.
+    """
+    problems: list[str] = []
+    editorial = dist / "editorial.json"
+    if not editorial.is_file():
+        return problems
+    try:
+        doc = json.loads(editorial.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return problems  # already reported by the signature pass
+
+    checked = 0
+    for idx, section in enumerate(doc.get("sections") or []):
+        if not isinstance(section, dict):
+            continue
+        art = section.get("artwork")
+        if not isinstance(art, dict):
+            continue
+        for field in ("ref", "refDark"):
+            ref = art.get(field)
+            if not isinstance(ref, str) or not ref:
+                continue
+            where = f"sections[{idx}].artwork.{field}"
+            # A published ref MUST be the content-addressed form. An authored
+            # path that reached the output means the bake step was skipped, and
+            # that is a hole in the integrity chain, not a cosmetic slip.
+            if not ref.startswith("assets/editorial/"):
+                problems.append(
+                    f"{where} names {ref!r}, which is not a hosted asset path -- "
+                    f"the artwork bake step did not run"
+                )
+                continue
+            path = dist / ref
+            if not path.is_file():
+                problems.append(f"{where} names {ref!r}, which is not in {dist}")
+                continue
+            actual = hashlib.sha256(path.read_bytes()).hexdigest()
+            if actual != path.stem:
+                problems.append(
+                    f"{where} {ref!r} is addressed by digest {path.stem!r} but its "
+                    f"bytes hash to {actual!r}"
+                )
+                continue
+            checked += 1
+    if checked:
+        print(f"verified {checked} hosted editorial image(s) against their content digests")
     return problems
 
 
