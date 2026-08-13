@@ -75,7 +75,11 @@ Adding an app is two fields:
 { "name": "my-app", "source": { "type": "git", "url": "https://github.com/org/my-app.git", "ref": "main" } }
 ```
 
-Then add `"my-app"` to exactly one category's `appRefs` in `catalog/editorial.json`.
+Then set `"categories": ["my-category"]` on the app's own entry in
+`catalog/official-registry.json`, naming exactly one id that `catalog/editorial.json`
+declares. Membership lives on the app rather than in a list somewhere else, so an
+app and its placement are one edit and a reference to an app that does not exist
+cannot be written down.
 An app in no category still appears — it lands in the default bucket rather than
 being hidden — but the validator will say so, since the usual cause is a
 forgotten edit.
@@ -86,11 +90,12 @@ Beyond per-document schema validation, `tools/validate.py` checks the
 invariants that span both files — the ones that validate fine in isolation and
 then render wrong in the store:
 
-- Every `appRefs` entry resolves to a declared, non-tombstoned app.
+- Every section reference resolves to a declared, non-tombstoned app -- `appRef`
+  on an `app` section, each `appRefs` entry on a `collection`.
 - An app is in **at most one** category. A partitioned rail is the whole point
-  of the taxonomy; use a `rail` section for cross-cutting collections like
-  "Staff picks", which is how an app appears in two places without
-  multi-category membership.
+  of the taxonomy; an app that belongs in more than one place is served by a
+  `collection` section or by search keywords, neither of which changes where
+  the taxonomy files it.
 - `categories[].order` values are unique, so the rail sequence does not depend
   on array position.
 - No duplicate app names or category ids.

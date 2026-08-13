@@ -60,7 +60,7 @@ def repo(tmp_path: Path) -> Path:
 
 
 def section(**over):
-    base = {"type": "spotlight", "appRefs": ["demo"], "artwork": {"ref": "art/hero.png"}}
+    base = {"type": "app", "appRef": "demo", "artwork": {"ref": "art/hero.png"}}
     base.update(over)
     return base
 
@@ -184,7 +184,7 @@ class TestBaking:
 
     def test_a_section_without_artwork_passes_through(self, repo):
         f = Findings()
-        doc = {"sections": [{"type": "rail", "title": "Picks", "appRefs": ["a"]}]}
+        doc = {"sections": [{"type": "collection", "title": "Picks", "appRefs": ["a", "b"]}]}
         assert bake_editorial_artwork(doc, EditorialAssets(repo), f) == doc
 
     def test_losing_the_light_variant_drops_the_whole_block(self, repo):
@@ -194,7 +194,7 @@ class TestBaking:
         doc = {"sections": [section(artwork={"ref": "art/nope.png", "refDark": "art/hero-dark.png"})]}
         out = bake_editorial_artwork(doc, EditorialAssets(repo), f)
         assert "artwork" not in out["sections"][0]
-        assert out["sections"][0]["appRefs"] == ["demo"], "the placement survives"
+        assert out["sections"][0]["appRef"] == "demo", "the placement survives"
 
     def test_losing_only_the_dark_variant_keeps_the_light_one(self, repo):
         f = Findings()

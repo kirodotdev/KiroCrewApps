@@ -10,7 +10,7 @@
 
   "properties": {
     "schemaVersion": {
-      "description": "Integer major. Additive-only within a major: new fields are optional and existing fields never change meaning. A major the client does not support triggers FULL fallback (cache -> bundled snapshot -> built-in heuristic), not a partial render.",
+      "description": "Integer major. Additive-only within a major: new fields are optional and existing fields never change meaning. A major the client does not support triggers FULL fallback (cache -> bundled snapshot -> built-in heuristic), not a partial render.\n\nONE CARVE-OUT, and it is narrow: a `sections` VARIANT that has never appeared in a published document may be removed, or have its bounds tightened, without a major bump. Compatibility is a promise to consumers, and a variant no client can ever have read has none -- the CDN's own history is the evidence. It does not extend to a variant that shipped even once, nor to any field of `categories`, which has been published since the first revision.",
       "type": "integer",
       "const": 1
     },
@@ -23,7 +23,7 @@
     "revision": { "type": "string", "minLength": 1 },
 
     "categories": {
-      "description": "Taxonomy AND membership together, so the reference check (`appRefs` -> a declared app) is the same cross-document check the publish step already runs for sections, and the registry carries no presentation at all. `order` drives the rail sequence -- there is no separate ordering section. An app in no category falls into a default bucket and is never hidden; membership is single-valued by construction (an app appearing in two categories is a curation error the publish step rejects), because a partitioned rail is the whole point -- use a `rail` section for cross-cutting collections instead.",
+      "description": "The category taxonomy: ids, display labels and rail order. MEMBERSHIP is not here -- it is stated on the registry entry, so an app and its placement are one edit and a reference to an app that does not exist is unrepresentable. `order` drives the rail sequence; there is no separate ordering section. An app in no category falls into a default bucket and is never hidden; membership is single-valued by construction (an app appearing in two categories is a curation error the publish step rejects), because a partitioned rail is the whole point -- an app that belongs in more than one place is served by a `collection` section or by search keywords, neither of which touches the taxonomy.\n\nThis list is the ONLY place the category vocabulary is defined: the authored registry validates an app's category against this document rather than repeating the set in an enum, so adding a category is one edit here.",
       "type": "array",
       "items": { "$ref": "#/$defs/category" },
       "maxItems": 30
@@ -98,83 +98,61 @@
     },
 
     "section": {
-      "description": "Closed per known variant, but the CLIENT must skip an unrecognized `type` rather than reject the document. Validating strictly here is for the publish gate; the reader is deliberately more tolerant.\n\nEXTENDING THIS. A new presentation shape gets a NEW `type` value, never a sub-discriminator inside an existing variant: the client-side rule above makes an unknown `type` safe (skipped until support ships), whereas a flag inside `spotlight` would make every older client render the new shape as a broken old one. Cardinality is NOT a reason to add a type -- `appRefs` already covers one app or a group.",
+      "description": "Closed per known variant, but the CLIENT must skip an unrecognized `type` rather than reject the document. Validating strictly here is for the publish gate; the reader is deliberately more tolerant.\n\nEXTENDING THIS. A new presentation shape gets a NEW `type` value, never a sub-discriminator inside an existing variant: the client-side rule above makes an unknown `type` safe (skipped until support ships), whereas a flag inside an existing variant would make every older client render the new shape as a broken old one.\n\nA variant earns its place by having a SURFACE, not by being conceivable. Only add one when a client is ready to draw it -- a type with no renderer validates, publishes, and then silently vanishes into the reader's skip path, which looks exactly like a bug from the curator's side.",
       "type": "object",
       "oneOf": [
-        { "$ref": "#/$defs/sectionSpotlight" },
-        { "$ref": "#/$defs/sectionRail" },
-        { "$ref": "#/$defs/sectionBanner" }
+        { "$ref": "#/$defs/sectionApp" },
+        { "$ref": "#/$defs/sectionCollection" }
       ]
     },
 
-    "sectionSpotlight": {
-      "title": "spotlight -- hero placement for one app or a group",
-      "description": "`appRefs` is a LIST even when it holds one entry: a single spotlight is the degenerate case of a group, so promoting one app to a collection is a data edit rather than a new section type and a second client code path. `title` is what a group needs and a single app does not, which is why it is optional here but required on `rail`.",
+    "sectionApp": {
+      "title": "app -- featured placement for ONE app",
+      "description": "The app's own name is the heading, so there is no `title`: a curator who wants to say something other than the app's name is describing a collection of one, and a collection is the variant that carries a theme.\n\nSeparate from `collection` because the two differ in what they REQUIRE, not merely in how many apps they hold: a collection is meaningless without a theme, and this variant is meaningless with one. Expressing both as a single variant with a variable-length list forces `title` to be optional everywhere and pushes 'required when more than one' into code the schema cannot see.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "appRefs"],
+      "required": ["type", "appRef"],
       "properties": {
-        "type": { "const": "spotlight" },
-        "appRefs": {
-          "type": "array",
-          "items": { "$ref": "#/$defs/appRef" },
-          "minItems": 1,
-          "maxItems": 20
-        },
-        "title": {
-          "description": "Names the group. Omit for a single-app spotlight, where the app's own name is the heading.",
+        "type": { "const": "app" },
+        "appRef": { "$ref": "#/$defs/appRef" },
+        "blurb": {
+          "description": "Overrides the app's registry description for this placement only. Absent means the registry description is used, which is the normal case -- an override is for when the editorial angle differs from how the author describes their own app.",
           "type": "string",
-          "minLength": 1,
-          "maxLength": 60
+          "maxLength": 200
         },
-        "blurb": { "type": "string", "maxLength": 200 },
         "artwork": { "$ref": "#/$defs/artwork" }
       }
     },
 
-    "sectionRail": {
-      "title": "rail -- titled group, for CROSS-CUTTING collections",
-      "description": "Independent of the taxonomy: this is how an app appears in more than one place without multi-category membership (\"Staff picks\", \"New this month\").",
+    "sectionCollection": {
+      "title": "collection -- several apps under a curator's theme",
+      "description": "`title` is REQUIRED: the theme is the entire reason several unrelated apps appear together, and an untitled collection gives the reader no way to understand why these apps share a card.\n\n`minItems` is 2 because a one-app collection is an `app` placement wearing a costume. `maxItems` is small because every member is RENDERED -- there is no collection detail page to hold an overflow, so a cap the card cannot draw would silently discard members that validated and published. Raising it requires giving the card somewhere to put them first.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "title", "appRefs"],
       "properties": {
-        "type": { "const": "rail" },
-        "title": { "type": "string", "minLength": 1, "maxLength": 60 },
+        "type": { "const": "collection" },
+        "title": {
+          "description": "The curator's theme. Names why these apps belong together -- not a category name, which the taxonomy already covers.\n\nTwo INDEPENDENT assertions rather than one clever pattern. A title must contain a non-space character, because `minLength` counts BYTES while the client counts visible characters: a whitespace-only title passes the cross-document checks, publishes, and is then dropped by the client, so the card vanishes with no error at the gate and nothing in the client's log. It must also be ONE line, because HTML collapses a newline to a space, so a multi-line title would validate, sign, and render as something other than what was authored.\n\nBoth are written anchored, with `[\\s\\S]*` shoulders so they still mean CONTAINMENT. That spelling matters: `[\\s\\S]` matches every character including a line break, whereas the tempting `^\\S+$` rejects every title containing a space and a bare `^[^\\r\\n]*\\S[^\\r\\n]*$` still admits a trailing newline, because the Python validator this repository runs treats `$` as end-of-input OR just before a trailing `\\n` (ECMA-262 does not). The second assertion is negated, so its inner pattern must stay a containment test -- anchoring it tightly would flip its meaning from `contains a line break` to `IS a line break` and let `\"Theme\\n\"` through.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "allOf": [
+            { "pattern": "^[\\s\\S]*\\S[\\s\\S]*$" },
+            { "not": { "pattern": "^[\\s\\S]*[\\r\\n][\\s\\S]*$" } }
+          ]
+        },
         "appRefs": {
+          "description": "Ordered. The card renders them in this sequence; there is no ranking, sorting or scoring applied on top, so the curator's order is what a reader sees.",
           "type": "array",
           "items": { "$ref": "#/$defs/appRef" },
-          "minItems": 1,
-          "maxItems": 20
+          "minItems": 2,
+          "maxItems": 6
         },
-        "artwork": { "$ref": "#/$defs/artwork" }
-      }
-    },
-
-    "sectionBanner": {
-      "title": "banner -- editorial copy, optional CTA",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "md"],
-      "properties": {
-        "type": { "const": "banner" },
-        "md": {
-          "description": "Restricted markdown. Rendered through the dashboard's sanitizer -- never raw HTML.",
+        "blurb": {
+          "description": "One line under the title. Absent is fine when the title carries the idea on its own.",
           "type": "string",
-          "maxLength": 500
-        },
-        "cta": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["label", "href"],
-          "properties": {
-            "label": { "type": "string", "minLength": 1, "maxLength": 40 },
-            "href": {
-              "description": "https only. A curated feed must not be able to point the client at other schemes.",
-              "type": "string",
-              "pattern": "^https://"
-            }
-          }
+          "maxLength": 200
         },
         "artwork": { "$ref": "#/$defs/artwork" }
       }
