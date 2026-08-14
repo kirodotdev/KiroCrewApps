@@ -2,15 +2,16 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.crew.kiro.dev/appstore/official-registry-v1.schema.json",
   "title": "KiroCrew official app registry",
-  "description": "Curated app catalog. Answers exactly two questions per app: WHAT it is (identity) and WHERE its bytes come from (source). Everything else is either GENERATED at publish time from the app's own app.json, or belongs in editorial.json (presentation) -- never hand-authored here. This document must not name other registries (catalog sources come from owner config or the build-time edition seam), must not carry presentation (that is editorial.json), and must not carry executable strings (the client never runs a command supplied by a fetched document).",
-
+  "description": "Curated app catalog. Answers exactly ONE question per app: how it is DESCRIBED -- identity, curated attribution, and artwork. It deliberately does NOT say where an app's bytes come from.\n\nFetch coordinates used to live here in a `source` block and had no consumer. The client reads inventory from its own bundled index (keyed `branch`, not `ref`) and discovers updates by comparing the version on that branch's tip against the installed one, so a published `source` implied a contract nothing honoured -- and its presence made this document look closer to owning inventory than it was. Those coordinates are read at publish time from the AUTHORED registry, where they still live, and stop there.\n\nEverything except identity and curated attribution is GENERATED at publish time from the app's own app.json. Layout belongs in editorial.json. This document must not name other registries (catalog sources come from owner config or the build-time edition seam) and must not carry executable strings (the client never runs a command supplied by a fetched document).",
   "$ref": "#/$defs/registryDocument",
-
   "$defs": {
     "registryDocument": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["schemaVersion", "apps"],
+      "required": [
+        "schemaVersion",
+        "apps"
+      ],
       "properties": {
         "schemaVersion": {
           "description": "Integer major. A major this client does not support triggers full fallback, not a partial read.",
@@ -30,54 +31,68 @@
         "apps": {
           "description": "Capped only as a sanity bound; the real defense against an oversized document is a transfer-size limit in the client, since a schema limit is only reached after the whole payload has been parsed. Note `removed`/`reinstated` are deliberately NOT capped: they are append-only history, and a schema limit that truncated them would start resurrecting withdrawn apps.",
           "type": "array",
-          "items": { "$ref": "#/$defs/entry" },
+          "items": {
+            "$ref": "#/$defs/entry"
+          },
           "maxItems": 5000
         },
         "removed": {
           "description": "Tombstones. Positive removal data that outranks a stale cached entry.",
           "type": "array",
-          "items": { "$ref": "#/$defs/tombstone" }
+          "items": {
+            "$ref": "#/$defs/tombstone"
+          }
         },
         "reinstated": {
           "description": "Explicit reinstatement records. The ONLY thing that may clear a persisted tombstone -- omission from `removed` must never resurrect an app. Permanently append-only, never pruned.",
           "type": "array",
-          "items": { "$ref": "#/$defs/reinstatement" }
+          "items": {
+            "$ref": "#/$defs/reinstatement"
+          }
         }
       }
     },
-
     "appName": {
       "description": "Unique app id. Same gate as the runtime KEBAB_RE in apps/manifest.py -- a traversing or absolute name must never reach a filesystem path.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 64
     },
-
-    "sha256": {
-      "type": "string",
-      "pattern": "^[a-f0-9]{64}$"
-    },
-
     "entry": {
-      "description": "AUTHORED: name + source. GENERATED at publish from the app's app.json: everything below the divider. A curator never types the generated fields, and an app author never edits this document.",
+      "description": "AUTHORED: name, plus `categories` and `author` when the curator states them. GENERATED at publish from the app's app.json: everything below the divider. A curator never types the generated fields, and an app author never edits this document.\n\nNo fetch coordinates. `additionalProperties` is false, so a publish step that regressed and re-emitted a `source` block would fail validation rather than quietly shipping a field no client reads.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "source"],
+      "required": [
+        "name"
+      ],
       "properties": {
-        "name": { "$ref": "#/$defs/appName" },
-        "source": { "$ref": "#/$defs/source" },
-
-        "displayName": { "type": "string", "maxLength": 60 },
+        "name": {
+          "$ref": "#/$defs/appName"
+        },
+        "minClientVersion": {
+          "description": "The earliest KiroCrew release carrying this app, when known. A client older than this can still LIST the app and tell the user to update, which is the point: the shelf stops being pinned to the client's release cadence. Full semver, because prereleases (0.2.0-nightly.20260806t065257, 0.2.0-rc.1) are real shipping versions; anchored at both ends, because an unanchored pattern accepts a trailing payload that then renders in a signed document.",
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 60
+        },
         "summary": {
           "description": "Short, list-safe. Long-form body/screenshots/highlights are never baked -- they stay lazy on the detail view.",
           "type": "string",
           "maxLength": 200
         },
-        "author": { "$ref": "#/$defs/author" },
+        "author": {
+          "$ref": "#/$defs/author"
+        },
         "categories": {
           "description": "Curator-assigned membership, carried through from the authored catalog. ORDER IS MEANINGFUL: the first entry is the primary category and is the one that places the app in a rail; a second only widens search and filtering. A client that does not recognise an id must SKIP it rather than reject the document, so an added category does not break older clients.",
           "type": "array",
-          "items": { "$ref": "#/$defs/categoryId" },
+          "items": {
+            "$ref": "#/$defs/categoryId"
+          },
           "minItems": 1,
           "maxItems": 2,
           "uniqueItems": true
@@ -85,16 +100,25 @@
         "tags": {
           "description": "AUTHOR-DECLARED, free-form, and VISIBLE as filter facets. Not a place for search synonyms -- use searchAliases for those.",
           "type": "array",
-          "items": { "type": "string", "maxLength": 32 },
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          },
           "maxItems": 16
         },
         "searchAliases": {
           "description": "Invisible search synonyms (\"deck\", \"powerpoint\"). Matched by search, never rendered as chips -- which is why these are not tags.",
           "type": "array",
-          "items": { "type": "string", "maxLength": 32 },
+          "items": {
+            "type": "string",
+            "maxLength": 32
+          },
           "maxItems": 16
         },
-        "version": { "type": "string", "maxLength": 64 },
+        "version": {
+          "type": "string",
+          "maxLength": 64
+        },
         "iconRef": {
           "description": "Path to the app's icon, never a URL. A builtin names an absolute client-local path (/app-assets/<app>/icon.svg) whose bytes it already ships. Every other source's icon is INGESTED at publish time and this is a catalog-relative content-addressed path (assets/icons/<sha256>.<ext>): the filename IS the digest of the bytes, and it appears in this signed document, so a client that verifies the signature and then hashes what it downloaded has end-to-end integrity for every icon from one signature. Hosting the bytes also takes the publisher's repository off the render path, which is what a per-icon clone through a proxy used to require.",
           "type": "string",
@@ -109,168 +133,103 @@
           "maxLength": 512,
           "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
         },
-        "heroRef": { "type": "string" }
+        "heroRef": {
+          "type": "string"
+        }
       }
     },
-
     "categoryId": {
       "description": "A category id, as declared in editorial.json. Deliberately not an enum here: the taxonomy lives in one document, and copying it into this schema would be a second source of truth that drifts. Existence is checked cross-document at publish.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 40
     },
-
     "author": {
       "description": "Structured from the start: a bare string cannot carry a link or distinguish a person from an org, and widening string -> object later would be a breaking change. The publish step normalizes a legacy bare string into { name }.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
-        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "url": { "type": "string", "pattern": "^https://" },
-        "kind": { "enum": ["person", "org"] }
-      }
-    },
-
-    "source": {
-      "description": "Where the app's BYTES come from. Closed discriminated union: exactly one variant, no extra properties, and each variant's pinning field is required. A loosely-modelled source would validate an archive with no digest -- an unpinned download.",
-      "type": "object",
-      "oneOf": [
-        { "$ref": "#/$defs/sourceGit" },
-        { "$ref": "#/$defs/sourceBuiltin" },
-        { "$ref": "#/$defs/sourceArchive" },
-        { "$ref": "#/$defs/sourceS3" },
-        { "$ref": "#/$defs/sourceOci" },
-        { "$ref": "#/$defs/sourceBundle" }
-      ]
-    },
-
-    "sourceBuiltin": {
-      "title": "builtin -- resolved from the client's own inventory",
-      "description": "An app bundled in the KiroCrew release the user already installed. There is deliberately NOTHING to fetch here and no digest: integrity comes from the signed application bundle, so a url or hash would be a second, weaker claim about bytes this document does not deliver. Additional properties are closed, which makes an entry carrying a clone target unrepresentable rather than merely discouraged. IMPORTANT for clients: this is a CLAIM in a fetched document, not an authorization. Resolve a built-in from your own inventory and never let a catalog entry designate one, or an entry naming an app you ship could shadow or impersonate it.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type"],
-      "properties": {
-        "type": { "const": "builtin" },
-        "minClientVersion": {
-          "description": "The earliest KiroCrew release carrying this app, when known. A client older than this can still LIST the app and tell the user to update, which is the point: the shelf stops being pinned to the client's release cadence. Full semver, because prereleases (0.2.0-nightly.20260806t065257, 0.2.0-rc.1) are real shipping versions; anchored at both ends, because an unanchored pattern accepts a trailing payload that then renders in a signed document.",
+        "name": {
           "type": "string",
-          "maxLength": 32,
-          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
-        }
-      }
-    },
-
-    "sourceGit": {
-      "title": "git (the only variant implemented in v1)",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "url", "ref"],
-      "properties": {
-        "type": { "const": "git" },
-        "url": {
-          "description": "https only, because a git URL is an execution vector once it reaches `git clone`: the `ext::` transport runs a command, a value beginning with `-` is argument injection into the git invocation, and `file://` reads arbitrary local paths. Restricting the scheme here keeps this document consistent with its own rule against carrying executable strings, rather than deferring entirely to a trusted-host gate that lives in the client and does not exist yet. This also costs nothing in practice: no trust tier supplies ambient clone credentials, so an ssh URL could not authenticate anyway. Self-hosted forges are still fine -- any https host works, and WHICH hosts may be cloned remains a separate allowlist gate.",
-          "type": "string",
-          "pattern": "^https://[^\\u0000\\s]+$",
-          "maxLength": 2048
-        },
-        "ref": {
-          "description": "MUST be a full immutable commit id. A branch name is a mutable pointer, so a signed index naming `main` signs nothing about the bytes. The publish pipeline resolves the curator's branch/tag to a commit and emits that.",
-          "type": "string",
-          "pattern": "^[a-f0-9]{40}$|^[a-f0-9]{64}$"
-        },
-        "subdir": {
-          "description": "Contained relative path: no absolute, no '..', no backslash, no NUL, and not empty (omit the field instead of passing \"\"). The '..' rule is a substring test, so it also rejects otherwise-legitimate names containing a double dot such as 'a..b'. That is deliberate -- this value becomes a filesystem path, and a conservative test is worth more than the rare directory name it costs.",
-          "type": "string",
-          "pattern": "^(?!/)(?!.*\\.\\.)(?!.*\\\\)[^\\u0000]+$",
           "minLength": 1,
-          "maxLength": 256
-        }
-      }
-    },
-
-    "sourceArchive": {
-      "title": "archive (reserved)",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "url", "sha256"],
-      "properties": {
-        "type": { "const": "archive" },
-        "url": { "type": "string", "format": "uri" },
-        "sha256": { "$ref": "#/$defs/sha256" }
-      }
-    },
-
-    "sourceS3": {
-      "title": "s3 (reserved)",
-      "description": "Separate from `archive` because the auth model differs: SigV4 with a region and an explicit credential grant vs an anonymous HTTPS GET. Needing credentials at all makes this variant contingent on the per-repository credential-grant mechanism -- no trust tier ever supplies them.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "bucket", "key", "region", "sha256"],
-      "properties": {
-        "type": { "const": "s3" },
-        "bucket": { "type": "string", "minLength": 1 },
-        "key": { "type": "string", "minLength": 1 },
-        "region": { "type": "string", "minLength": 1 },
-        "sha256": { "$ref": "#/$defs/sha256" }
-      }
-    },
-
-    "sourceOci": {
-      "title": "oci (reserved)",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "ref", "digest"],
-      "properties": {
-        "type": { "const": "oci" },
-        "ref": { "type": "string", "minLength": 1 },
-        "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
-      }
-    },
-
-    "sourceBundle": {
-      "title": "bundle (reserved)",
-      "description": "Prebuilt ESM bundle. Maps the federated-app-platform RFC's bundleUrl + bundleHash onto this union.",
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["type", "url", "integrity"],
-      "properties": {
-        "type": { "const": "bundle" },
-        "url": { "type": "string", "format": "uri" },
-        "integrity": {
+          "maxLength": 80
+        },
+        "url": {
           "type": "string",
-          "pattern": "^sha(256|384|512)-[A-Za-z0-9+/]+={0,2}$"
+          "pattern": "^https://"
+        },
+        "kind": {
+          "enum": [
+            "person",
+            "org"
+          ]
         }
       }
     },
-
     "tombstone": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "reason", "since"],
+      "required": [
+        "name",
+        "reason",
+        "since"
+      ],
       "properties": {
-        "name": { "$ref": "#/$defs/appName" },
-        "reason": { "enum": ["deprecated", "superseded", "withdrawn", "malicious"] },
-        "since": { "type": "string", "format": "date" },
-        "note": { "type": "string", "maxLength": 300 },
-        "replacedBy": { "$ref": "#/$defs/appName" },
+        "name": {
+          "$ref": "#/$defs/appName"
+        },
+        "reason": {
+          "enum": [
+            "deprecated",
+            "superseded",
+            "withdrawn",
+            "malicious"
+          ]
+        },
+        "since": {
+          "type": "string",
+          "format": "date"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "replacedBy": {
+          "$ref": "#/$defs/appName"
+        },
         "advice": {
           "description": "What the client should do about an ALREADY-INSTALLED copy. Default 'keep' -- only a yank escalates to 'uninstall'.",
-          "enum": ["keep", "disable", "uninstall"],
+          "enum": [
+            "keep",
+            "disable",
+            "uninstall"
+          ],
           "default": "keep"
         }
       }
     },
-
     "reinstatement": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "since"],
+      "required": [
+        "name",
+        "since"
+      ],
       "properties": {
-        "name": { "$ref": "#/$defs/appName" },
-        "since": { "type": "string", "format": "date" },
-        "note": { "type": "string", "maxLength": 300 }
+        "name": {
+          "$ref": "#/$defs/appName"
+        },
+        "since": {
+          "type": "string",
+          "format": "date"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        }
       }
     }
   }

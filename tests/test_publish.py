@@ -204,7 +204,7 @@ def test_bakes_generated_fields():
     findings = Findings()
     entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings)
 
-    assert entry["source"]["ref"] == "a" * 40, "the pin must be the resolved commit"
+    assert "source" not in entry, "fetch coordinates are read here, never published"
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
     assert entry["author"] == {"name": "Demo Labs"}
@@ -576,12 +576,11 @@ def build(authored_doc, tmp_path, allow_local=True):
 def test_built_document_satisfies_the_published_schema(tmp_path, allow_local_urls):
     doc, findings, commit = build({"schemaVersion": 1, "apps": [authored()]}, tmp_path)
     assert findings.errors == []
-    assert doc["apps"][0]["source"]["ref"] == commit
+    assert "source" not in doc["apps"][0]
 
-    # The published schema requires an https url, and these tests deliberately
-    # build from a local repo. Swap the transport back before checking shape --
-    # the schema rejecting the local path is correct behaviour, not a finding.
-    doc["apps"][0]["source"]["url"] = "https://example.com/demo-app.git"
+    # No transport swap needed before checking shape: these tests build from a
+    # local repo, and the published document no longer carries the url that the
+    # schema's https rule would have rejected.
 
     from validate import check_schema
     out = Findings()
@@ -641,11 +640,27 @@ def test_empty_history_is_omitted_not_emitted_empty(tmp_path, allow_local_urls):
 
 
 def test_revision_is_derived_from_content(tmp_path, allow_local_urls):
-    """Same content must give the same revision digest; different content must not."""
+    """Same content must give the same revision digest; different content must not.
+
+    The published document no longer carries a commit, so two builds from
+    DIFFERENT upstream repositories are byte-identical when they describe the app
+    identically -- and must share a revision. That is the point of deriving it
+    from content: a client re-parses when what it renders changed, not every time
+    an app's repository moved. Real code churn that matters still shows up,
+    because `version` is published and comes from the app's own manifest.
+    """
     a, _, _ = build({"schemaVersion": 1, "apps": [authored()]}, tmp_path / "one")
     b, _, _ = build({"schemaVersion": 1, "apps": [authored()]}, tmp_path / "two")
-    # Different repos -> different commit pins -> different content digest.
-    assert a["revision"].split("-")[-1] != b["revision"].split("-")[-1]
+    assert a["revision"].split("-")[-1] == b["revision"].split("-")[-1]
+
+    # A published field differing IS different content. Curated attribution is
+    # used rather than the name, because a differing name is refused outright:
+    # the entry and the app's own manifest must agree about what it is called.
+    c, _, _ = build(
+        {"schemaVersion": 1, "apps": [{**authored(), "author": {"name": "Other Labs"}}]},
+        tmp_path / "three",
+    )
+    assert c["revision"].split("-")[-1] != a["revision"].split("-")[-1]
 
     digest = publish.content_digest({"apps": [], "removed": [], "reinstated": []})
     assert digest == publish.content_digest({"apps": [], "removed": [], "reinstated": []})
@@ -861,17 +876,19 @@ def test_normalize_author_is_schema_total(value, expected):
 # --------------------------------------------------------------------------
 
 
-def test_builtin_publishes_no_fetch_coordinates():
-    """`manifestFrom` is publish-time only, like `note`.
+def test_no_entry_publishes_fetch_coordinates():
+    """`manifestFrom` is publish-time only, like `note` -- and so, now, is the
+    whole source block.
 
-    Shipping it would hand a client a clone target for code it already has, which
-    is the duplication the type exists to make unrepresentable.
+    Shipping `manifestFrom` would hand a client a clone target for code it
+    already has. Shipping any coordinate at all would advertise a contract the
+    client does not honour: it resolves inventory from its own bundled index and
+    never reads install coordinates from this document.
     """
     entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings())
-    assert entry["source"] == {"type": "builtin"}
-    assert "manifestFrom" not in entry["source"]
-    assert "ref" not in entry["source"], "there is no commit to pin: nothing is fetched"
-    assert "url" not in entry["source"]
+    assert "source" not in entry
+    for leaked in ("manifestFrom", "ref", "url", "branch", "subdir"):
+        assert leaked not in entry, leaked
 
 
 def test_builtin_still_derives_display_fields_from_the_manifest():
@@ -881,16 +898,25 @@ def test_builtin_still_derives_display_fields_from_the_manifest():
     assert entry["summary"] == "Does the demo thing."
 
 
-def test_builtin_keeps_minclientversion_but_a_bare_source_is_fine():
-    pinned = {
-        **BUILTIN,
-        "source": {**BUILTIN["source"], "minClientVersion": "0.2.0-nightly.20260806"},
-    }
-    entry = publish.bake_entry(pinned, MANIFEST, "b" * 40, Findings())
-    assert entry["source"] == {
-        "type": "builtin",
-        "minClientVersion": "0.2.0-nightly.20260806",
-    }
+def test_minclientversion_publishes_from_the_entry():
+    """It survives the source block's removal because it never belonged there.
+
+    It states which client releases can RUN the app -- a fact about the app, not
+    about where its bytes come from. It sat under the source block only because
+    that was the authored side's one container, and it would have been deleted by
+    accident along with the coordinates.
+    """
+    stated = {**BUILTIN, "minClientVersion": "0.2.0-nightly.20260806"}
+    entry = publish.bake_entry(stated, MANIFEST, "b" * 40, Findings())
+    assert entry["minClientVersion"] == "0.2.0-nightly.20260806"
+    assert "source" not in entry
+
+
+def test_minclientversion_is_omitted_when_not_stated():
+    """Absent, not empty: a client compares against it only when it exists, and a
+    blank floor would read as a version no release satisfies."""
+    entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings())
+    assert "minClientVersion" not in entry
 
 
 def test_builtin_reads_its_manifest_from_manifest_from_not_from_source():
@@ -1017,7 +1043,7 @@ def test_the_real_launchdarkly_app_is_publishable_but_unattributed():
     )
     assert "author" not in entry
     assert findings.errors == []
-    assert entry["source"]["ref"] == "0" * 40, "still pinned to the resolved commit"
+    assert "source" not in entry, "the row is presentation only"
 
 
 def test_structured_author_objects_are_checked_too():
@@ -1094,29 +1120,29 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
     )
     monkeypatch.setattr(publish, "CATALOG_DIR", catalog)
 
-    # The authored catalog points at a local repo, which BOTH registry schemas
-    # reject (https only). Relax that one recogniser in throwaway copies so the
-    # rest of the chain can be exercised for real; every other constraint --
-    # including the commit-only `ref` -- still applies.
+    # The authored catalog points at a local repo, which the AUTHORED schema
+    # rejects (https only). Relax that one recogniser in a throwaway copy so the
+    # rest of the chain can be exercised for real; every other constraint still
+    # applies. The published schema needs no relaxing: it carries no url.
     relaxed = tmp_path / "schema"
     relaxed.mkdir()
-    for name, defname in (
-        ("authored-registry.schema.json", "authoredSourceGit"),
-        ("official-registry.schema.json", "sourceGit"),
-    ):
+    for name, defname in (("authored-registry.schema.json", "authoredSourceGit"),):
         schema = json.loads((publish.SCHEMA_DIR / name).read_text())
         url_def = schema["$defs"][defname]["properties"]["url"]
         url_def.pop("pattern", None)
         url_def["minLength"] = 1
         (relaxed / name).write_text(json.dumps(schema))
+    (relaxed / "official-registry.schema.json").write_text(
+        (publish.SCHEMA_DIR / "official-registry.schema.json").read_text()
+    )
     (relaxed / "editorial.schema.json").write_text(
         (publish.SCHEMA_DIR / "editorial.schema.json").read_text()
     )
 
     import validate as validate_mod
     monkeypatch.setattr(validate_mod, "SCHEMA_DIR", relaxed)
-    # The published-output check must ALSO use the relaxed copy here, since the
-    # emitted url is still the local path.
+    # The published-output check reads the copy too, so point publish at the same
+    # directory; the copy it finds there is the real, unrelaxed published schema.
     monkeypatch.setattr(publish, "SCHEMA_DIR", relaxed)
 
     kms = FakeKms()
@@ -1129,7 +1155,7 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
 
     registry = json.loads((out / "official-registry.json").read_text())
     entry = registry["apps"][0]
-    assert entry["source"]["ref"] == commit, "must be pinned to the resolved commit"
+    assert "source" not in entry, "the signed document carries no fetch coordinates"
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
     assert entry["author"] == {"name": "Demo Labs"}
@@ -1518,7 +1544,10 @@ class TestAssetRefRuleMatchesTheSchema:
                 "schemaVersion": 1,
                 "generatedAt": "2026-01-01T00:00:00Z",
                 "revision": "2026-01-01T00:00:00Z-abcdef1",
-                "apps": [builtin, {**fetched, "source": {"type": "builtin"}}],
+                # Both rows go in as baked. The fetched one needed its git source
+                # swapped for a builtin block to get past the schema's https rule;
+                # with no source published there is nothing left to launder.
+                "apps": [builtin, fetched],
             },
             publish.SCHEMA_DIR / "official-registry.schema.json",
             "official-registry.json",

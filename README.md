@@ -47,17 +47,26 @@ would break one of them:
 
 |  | Authored | Published |
 |---|---|---|
-| `source.ref` | commit, **branch, or tag** | immutable commit only |
+| `source` (where the bytes are) | **required** | **absent** |
 | Display fields (`displayName`, `summary`, `author`, `tags`, …) | **forbidden** | present, generated |
 | `generatedAt` / `revision` | forbidden | stamped by CI |
 
-A curator writes a branch because pinning is the pipeline's job, not a human's.
+The published document is **presentation only**: it says how an app is described
+and illustrated, never where to fetch it. A curator states the source so publish
+can read the app's own `app.json`, and it stops there — the client resolves
+inventory from its own bundled index and discovers updates by comparing the
+version on that index's branch tip against the installed one, so a published
+`source` would have advertised a contract nothing honours.
+
 Display fields are forbidden in authored input so *generated, never authored* is
 machine-checked rather than a convention someone remembers — they are baked from
 each app's own `app.json` at publish time, and therefore cannot drift from the
 app or be inflated by whoever edits the catalog.
 
-The published schema is the stricter one, because it is what clients validate.
+The published schema is the stricter one, because it is what clients validate,
+and `additionalProperties` is closed on an entry — so a publish step that
+regressed and re-emitted fetch coordinates fails validation instead of shipping a
+field no client reads.
 
 ## Authoring a change
 
@@ -202,8 +211,9 @@ schema:
 
 Resolve-then-fetch is two round trips, so after fetching the pipeline verifies
 `HEAD` equals the commit it resolved and that the object is a **commit** — a ref
-that moved in between, or an annotated tag's object id, would otherwise publish
-bytes that disagree with the pin.
+that moved in between, or an annotated tag's object id, would otherwise have the
+display fields and icons published from a tree other than the one resolved. The
+commit governs which bytes are READ; it is not itself published.
 
 ## Where it gets served
 

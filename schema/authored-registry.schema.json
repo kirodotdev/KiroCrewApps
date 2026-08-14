@@ -3,11 +3,12 @@
   "$id": "https://schemas.crew.kiro.dev/appstore/authored-registry-v1.schema.json",
   "title": "KiroCrew official app registry (AUTHORED input)",
   "description": "What a CURATOR writes in this repository. Deliberately NOT the wire format: the publish pipeline turns this into official-registry.schema.json by resolving each source ref to an immutable commit, baking the generated fields from each app's own app.json, and stamping generatedAt + revision. Two differences from the published schema, both intentional: (1) `ref` may be a branch or tag here, because pinning is the pipeline's job, not a human's; (2) every generated field is FORBIDDEN here, so 'generated, never authored' is machine-checked rather than a convention someone remembers. A curator answers only WHAT the app is and WHERE its bytes come from.",
-
   "type": "object",
   "additionalProperties": false,
-  "required": ["schemaVersion", "apps"],
-
+  "required": [
+    "schemaVersion",
+    "apps"
+  ],
   "properties": {
     "schemaVersion": {
       "description": "Tracks the published major it compiles to.",
@@ -16,35 +17,52 @@
     },
     "apps": {
       "type": "array",
-      "items": { "$ref": "#/$defs/authoredEntry" }
+      "items": {
+        "$ref": "#/$defs/authoredEntry"
+      }
     },
     "removed": {
       "description": "Tombstones are authored by hand -- they are a curation decision, not derived from anything. Carried through to the published document unchanged.",
       "type": "array",
-      "items": { "$ref": "#/$defs/tombstone" }
+      "items": {
+        "$ref": "#/$defs/tombstone"
+      }
     },
     "reinstated": {
       "description": "Append-only reinstatement records. The only thing that may clear a persisted tombstone.",
       "type": "array",
-      "items": { "$ref": "#/$defs/reinstatement" }
+      "items": {
+        "$ref": "#/$defs/reinstatement"
+      }
     }
   },
-
   "$defs": {
     "appName": {
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 64
     },
-
     "authoredEntry": {
       "description": "Identity, source, and attribution. Every OTHER field the store displays is generated at publish from the app's app.json, so it cannot drift from the app and cannot be inflated by whoever edits this file. `author` is the deliberate exception: it is an assertion about provenance rather than a description of the app, and this document is signed by us, so it must be ours to state. Presentation (categories, membership, layout) is not here at all -- it lives in editorial.json.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "source"],
+      "required": [
+        "name",
+        "source"
+      ],
       "properties": {
-        "name": { "$ref": "#/$defs/appName" },
-        "source": { "$ref": "#/$defs/authoredSource" },
+        "name": {
+          "$ref": "#/$defs/appName"
+        },
+        "minClientVersion": {
+          "description": "The earliest KiroCrew release that carries this app. Lets the store list a built-in the running client does not have yet and say so, instead of offering an install it cannot perform. Full semver, so a prerelease (0.2.0-nightly.20260806t065257, 0.2.0-rc.1) is statable -- those are real shipping versions, and a release-only pattern would make the earliest carrying release unnameable for anything that first shipped on a nightly.",
+          "type": "string",
+          "maxLength": 32,
+          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
+        },
+        "source": {
+          "$ref": "#/$defs/authoredSource"
+        },
         "author": {
           "description": "Curator-stated attribution, overriding whatever the app's manifest claims. The one display field that is authorable here, because it is the only one that is an ASSERTION rather than a description: a manifest lives in the publisher's repository, so its `author` is a self-claim by the party being described -- and this document is signed by us, so what it says about provenance has to be what WE state. Omit it to fall back to the manifest.",
           "$ref": "#/$defs/author"
@@ -52,7 +70,9 @@
         "categories": {
           "description": "Membership, stated on the app rather than collected into a list somewhere else -- so an app and its placement are one edit, and a reference to an app that does not exist is unrepresentable. Curator-assigned and deliberately NOT read from the app's manifest, or an author could self-promote into a curated category by editing their own app.json. Tags cannot promote either: they filter, they never define the rail. ORDER IS MEANINGFUL: the first entry is the primary category and decides which rail the app is partitioned into, so the rails stay a partition; a second only widens search and filtering. Capped at two so nothing appears everywhere. Permitted ids are the categories declared in editorial.json, checked cross-document at validation -- adding a category stays one edit in one file.",
           "type": "array",
-          "items": { "$ref": "#/$defs/categoryId" },
+          "items": {
+            "$ref": "#/$defs/categoryId"
+          },
           "minItems": 1,
           "maxItems": 2,
           "uniqueItems": true
@@ -64,47 +84,69 @@
         }
       }
     },
-
     "categoryId": {
       "description": "A category id. The pattern is checked here; that the id actually EXISTS is checked cross-document against editorial.json, because a schema cannot reference another document's contents -- and duplicating the list into an enum here would create a second source of truth that silently drifts.",
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 40
     },
-
     "author": {
       "description": "Same shape as the published document's author, so a curator-stated value needs no translation at publish.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["name"],
+      "required": [
+        "name"
+      ],
       "properties": {
-        "name": { "type": "string", "minLength": 1, "maxLength": 80 },
-        "url": { "type": "string", "pattern": "^https://" },
-        "kind": { "enum": ["person", "org"] }
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 80
+        },
+        "url": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "kind": {
+          "enum": [
+            "person",
+            "org"
+          ]
+        }
       }
     },
-
     "authoredSource": {
       "type": "object",
       "oneOf": [
-        { "$ref": "#/$defs/authoredSourceGit" },
-        { "$ref": "#/$defs/authoredSourceBuiltin" }
+        {
+          "$ref": "#/$defs/authoredSourceGit"
+        },
+        {
+          "$ref": "#/$defs/authoredSourceBuiltin"
+        }
       ]
     },
-
     "authoredSourceBuiltin": {
       "title": "builtin -- ships inside the client, nothing to fetch",
       "description": "An app bundled in the KiroCrew application itself. `source` answers where the BYTES come from, and for a built-in they come from the release the user already installed -- so this variant carries no fetch coordinates and the published entry carries none either. Typing it `git` instead would be a description of where the source code is kept, which is a different question, and would tell a client to clone a few hundred megabytes to obtain a second copy of code already on disk. Listing built-ins here is what decouples the store's shelf from the client's release cadence.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "manifestFrom"],
+      "required": [
+        "type",
+        "manifestFrom"
+      ],
       "properties": {
-        "type": { "const": "builtin" },
+        "type": {
+          "const": "builtin"
+        },
         "manifestFrom": {
           "description": "Where publish READS the app's app.json to generate display fields. Publish-time only: stripped at bake, exactly like `note`, because shipping it would hand clients a clone target for code they already have. It is not a trust anchor -- nothing a manifest says about who wrote it is honoured on the strength of this url.",
           "type": "object",
           "additionalProperties": false,
-          "required": ["url", "ref"],
+          "required": [
+            "url",
+            "ref"
+          ],
           "properties": {
             "url": {
               "type": "string",
@@ -124,23 +166,22 @@
               "maxLength": 256
             }
           }
-        },
-        "minClientVersion": {
-          "description": "The earliest KiroCrew release that carries this app. Lets the store list a built-in the running client does not have yet and say so, instead of offering an install it cannot perform. Full semver, so a prerelease (0.2.0-nightly.20260806t065257, 0.2.0-rc.1) is statable -- those are real shipping versions, and a release-only pattern would make the earliest carrying release unnameable for anything that first shipped on a nightly.",
-          "type": "string",
-          "maxLength": 32,
-          "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\\+[0-9A-Za-z.-]+)?$"
         }
       }
     },
-
     "authoredSourceGit": {
       "title": "git -- the only transport implemented in v1",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "url", "ref"],
+      "required": [
+        "type",
+        "url",
+        "ref"
+      ],
       "properties": {
-        "type": { "const": "git" },
+        "type": {
+          "const": "git"
+        },
         "url": {
           "description": "https only -- same reasoning as the published schema: `ext::` executes, a leading `-` injects arguments, `file://` reads local paths, and no trust tier supplies clone credentials so ssh could not authenticate regardless.",
           "type": "string",
@@ -162,29 +203,66 @@
         }
       }
     },
-
     "tombstone": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "reason", "since"],
+      "required": [
+        "name",
+        "reason",
+        "since"
+      ],
       "properties": {
-        "name": { "$ref": "#/$defs/appName" },
-        "reason": { "enum": ["deprecated", "superseded", "withdrawn", "malicious"] },
-        "since": { "type": "string", "format": "date" },
-        "note": { "type": "string", "maxLength": 300 },
-        "replacedBy": { "$ref": "#/$defs/appName" },
-        "advice": { "enum": ["keep", "disable", "uninstall"], "default": "keep" }
+        "name": {
+          "$ref": "#/$defs/appName"
+        },
+        "reason": {
+          "enum": [
+            "deprecated",
+            "superseded",
+            "withdrawn",
+            "malicious"
+          ]
+        },
+        "since": {
+          "type": "string",
+          "format": "date"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        },
+        "replacedBy": {
+          "$ref": "#/$defs/appName"
+        },
+        "advice": {
+          "enum": [
+            "keep",
+            "disable",
+            "uninstall"
+          ],
+          "default": "keep"
+        }
       }
     },
-
     "reinstatement": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "since"],
+      "required": [
+        "name",
+        "since"
+      ],
       "properties": {
-        "name": { "$ref": "#/$defs/appName" },
-        "since": { "type": "string", "format": "date" },
-        "note": { "type": "string", "maxLength": 300 }
+        "name": {
+          "$ref": "#/$defs/appName"
+        },
+        "since": {
+          "type": "string",
+          "format": "date"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 300
+        }
       }
     }
   }

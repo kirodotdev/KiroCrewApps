@@ -490,7 +490,8 @@ def test_rejects_a_section_carrying_an_arbitrary_url(tmp_path):
 
 
 # --------------------------------------------------------------------------
-# The published wire schema is stricter than the authored one.
+# The published wire schema is stricter than the authored one, and narrower:
+# fetch coordinates are authored but never published.
 # --------------------------------------------------------------------------
 
 
@@ -501,33 +502,39 @@ def published_errors(doc: dict) -> list[str]:
     return [e.message for e in Draft202012Validator(schema).iter_errors(doc)]
 
 
-def test_published_schema_rejects_mutable_ref():
-    """A signed index naming 'main' signs nothing about the bytes."""
-    assert published_errors({"schemaVersion": 1, "apps": [app(ref="main")]}) != []
+def test_published_schema_refuses_a_source_block():
+    """The published document is presentation only: identity, curated copy, art.
+
+    Fetch coordinates are read from the authored registry at publish time and
+    stop there. `entry.additionalProperties` is false, so a publish step that
+    regressed and re-emitted the block fails validation here instead of shipping
+    a field no client reads -- which is exactly how the old block survived.
+    """
+    entry = {
+        "name": "demo-app",
+        "source": {"type": "git", "url": "https://x/a.git", "ref": "a" * 40},
+    }
+    assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
 
 
-def test_published_schema_accepts_commit_ref():
-    assert published_errors({"schemaVersion": 1, "apps": [app(ref="a" * 40)]}) == []
+def test_published_schema_refuses_a_builtin_source_block_too():
+    """Neither transport is publishable, not just the fetchable one."""
+    entry = {"name": "demo-app", "source": {"type": "builtin"}}
+    assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
+
+
+def test_published_schema_accepts_a_bare_identity_row():
+    """`name` alone is a complete published entry.
+
+    Everything else is optional: display fields are generated from the app's own
+    manifest and a manifest that declares none must still publish.
+    """
+    assert published_errors({"schemaVersion": 1, "apps": [{"name": "demo-app"}]}) == []
 
 
 def test_published_schema_rejects_bare_string_author():
     """author is a struct; a bare string cannot carry a URL or person/org kind."""
-    entry = app(ref="a" * 40)
-    entry["author"] = "kirocrew"
-    assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
-
-
-def test_published_schema_rejects_digestless_archive():
-    """An archive with no digest is an unpinned download."""
-    entry = {"name": "demo-app", "source": {"type": "archive", "url": "https://x/a.tgz"}}
-    assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
-
-
-def test_published_schema_rejects_mixed_source_variants():
-    entry = {
-        "name": "demo-app",
-        "source": {"type": "git", "url": "https://x/a.git", "ref": "a" * 40, "sha256": "b" * 64},
-    }
+    entry = {"name": "demo-app", "author": "kirocrew"}
     assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
 
 
@@ -785,6 +792,7 @@ def builtin(
     name: str = "demo-app",
     manifest_from: dict | None = None,
     categories=None,
+    min_client_version: str | None = None,
     **source_extra,
 ) -> dict:
     source: dict = {"type": "builtin", **source_extra}
@@ -797,6 +805,10 @@ def builtin(
             "subdir": "src/apps/builtins/demo_app",
         }
     entry = {"name": name, "source": source}
+    if min_client_version is not None:
+        # Entry-level, not on the source: it states which client releases can run
+        # the app, which has nothing to do with where the app's bytes come from.
+        entry["minClientVersion"] = min_client_version
     entry["categories"] = categories if categories is not None else ["developer-tools"]
     return entry
 
@@ -819,7 +831,7 @@ def test_accepts_a_builtin_without_minclientversion(tmp_path):
     stating an unverified one would tell a client that already HAS the app to
     update before it can use it."""
     entry = builtin()
-    assert "minClientVersion" not in entry["source"]
+    assert "minClientVersion" not in entry
     assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) == []
 
 
@@ -832,8 +844,17 @@ def test_accepts_real_shipping_version_shapes(tmp_path, version):
     the literal string the installed nightly carries. A release-only pattern
     would make the earliest carrying release unnameable for anything that first
     shipped on a nightly."""
-    entry = builtin(minClientVersion=version)
+    entry = builtin(min_client_version=version)
     assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) == []
+
+
+def test_rejects_minclientversion_on_the_source_block(tmp_path):
+    """It moved up to the entry. Leaving the old placement valid would let a
+    curator write it where publish no longer reads it, and the app would publish
+    with no floor at all rather than the one that was stated."""
+    entry = builtin()
+    entry["source"]["minClientVersion"] = "0.2.0"
+    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
 
 
 @pytest.mark.parametrize(
@@ -936,15 +957,14 @@ def published_errors_for(*apps: dict) -> list[str]:
     return findings.errors
 
 
-def published_builtin(**source_extra) -> dict:
-    return {"name": "demo-app", "source": {"type": "builtin", **source_extra}}
+def published_row(**extra) -> dict:
+    """A minimal published entry, with *extra* set at the ENTRY level.
 
-
-def test_published_builtin_needs_no_fetch_coordinates_at_all():
-    """`{"type": "builtin"}` alone is a complete, valid published source: there is
-    nothing to fetch and no digest, because integrity comes from the signed
-    application bundle the app ships inside."""
-    assert published_errors_for(published_builtin()) == []
+    There is no builtin/git distinction to fixture any more: the published
+    document does not say where an app comes from, so every row has the same
+    shape and `name` is the only required key.
+    """
+    return {"name": "demo-app", **extra}
 
 
 @pytest.mark.parametrize(
@@ -953,7 +973,7 @@ def test_published_builtin_needs_no_fetch_coordinates_at_all():
 def test_published_schema_accepts_real_shipping_versions(version):
     """A release-only pattern here would reject the version the installed nightly
     literally carries."""
-    assert published_errors_for(published_builtin(minClientVersion=version)) == []
+    assert published_errors_for(published_row(minClientVersion=version)) == []
 
 
 @pytest.mark.parametrize(
@@ -963,25 +983,34 @@ def test_published_schema_rejects_a_malformed_version(version):
     """Both trailing-payload cases sit under the 32-char cap, so each one fails on
     the `$` anchor rather than on maxLength -- which is what makes them pin the
     anchor rather than merely appear to."""
-    assert published_errors_for(published_builtin(minClientVersion=version)) != []
+    assert published_errors_for(published_row(minClientVersion=version)) != []
 
 
 @pytest.mark.parametrize(
     "extra",
     [
+        {"source": {"type": "git", "url": "https://x/a.git", "ref": "a" * 40}},
+        {"source": {"type": "builtin"}},
         {"url": "https://github.com/kirodotdev/KiroCrew.git"},
         {"ref": "a" * 40},
+        {"branch": "main"},
         {"manifestFrom": {"url": "https://example.com/a.git", "ref": "main"}},
         {"sha256": "a" * 64},
         {"subdir": "src/apps"},
     ],
 )
-def test_published_builtin_cannot_carry_a_fetch_target(extra):
-    """Closed `additionalProperties` is the mechanism: it makes a published
-    built-in with somewhere to clone from UNREPRESENTABLE, rather than leaving it
-    to publish to remember to strip. `manifestFrom` is in this list because
-    leaking it is the specific regression the strip prevents."""
-    assert published_errors_for(published_builtin(**extra)) != []
+def test_published_entry_cannot_carry_a_fetch_target_anywhere(extra):
+    """Closed `additionalProperties` is the mechanism: it makes a published entry
+    with somewhere to clone from UNREPRESENTABLE, rather than leaving it to
+    publish to remember to strip.
+
+    The list covers the nested block and each coordinate on its own, because a
+    coordinate re-added directly to the entry would evade a check that only knew
+    about `source`. `manifestFrom` is here because leaking it -- handing clients a
+    clone target for code that ships in their own wheel -- is the specific
+    regression the old strip existed to prevent.
+    """
+    assert published_errors_for(published_row(**extra)) != []
 
 
 # ---------------------------------------------------------------------------
@@ -1005,8 +1034,8 @@ def test_published_builtin_cannot_carry_a_fetch_target(extra):
     ],
 )
 def test_published_schema_accepts_both_icon_ref_shapes(ref):
-    assert published_errors_for({**published_builtin(), "iconRef": ref}) == []
-    assert published_errors_for({**published_builtin(), "iconRefDark": ref}) == []
+    assert published_errors_for({**published_row(), "iconRef": ref}) == []
+    assert published_errors_for({**published_row(), "iconRefDark": ref}) == []
 
 
 @pytest.mark.parametrize(
@@ -1026,10 +1055,10 @@ def test_published_schema_accepts_both_icon_ref_shapes(ref):
     ],
 )
 def test_published_schema_rejects_a_url_or_escaping_icon_ref(ref):
-    assert published_errors_for({**published_builtin(), "iconRef": ref}) != [], ref
-    assert published_errors_for({**published_builtin(), "iconRefDark": ref}) != [], ref
+    assert published_errors_for({**published_row(), "iconRef": ref}) != [], ref
+    assert published_errors_for({**published_row(), "iconRefDark": ref}) != [], ref
 
 
 def test_published_icon_refs_are_optional():
     """Most apps ship one icon and no dark variant; neither key is required."""
-    assert published_errors_for(published_builtin()) == []
+    assert published_errors_for(published_row()) == []

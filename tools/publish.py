@@ -788,18 +788,27 @@ def bake_entry(
             f"the catalog entry and the app must agree"
         )
 
-    source = dict(authored["source"])
-    if source.get("type") == "builtin":
-        # A built-in resolves from the client's OWN inventory, so the published
-        # entry carries no fetch coordinates at all: `manifestFrom` exists only
-        # so publish can read display fields, and shipping it would hand clients
-        # a clone target for code they already have. Same curator-only-then-
-        # stripped pattern as `note`.
-        source.pop("manifestFrom", None)
-    else:
-        source["ref"] = commit
+    # Fetch coordinates are read here and DELIBERATELY NOT PUBLISHED. The catalog
+    # is a presentation document: it decides how an app is described and
+    # illustrated, never where its bytes come from. Inventory and install
+    # coordinates live on the client -- which reads `branch`, not `ref`, and
+    # discovers updates by comparing the version on that branch's tip against the
+    # installed one. A `source` block in the published document had no consumer at
+    # all, and its presence implied a contract the client never honoured.
+    #
+    # `url` and `commit` are still needed locally: the icon ingester fetches the
+    # declared blob from that tree below.
+    source = authored["source"]
+    source_url = source.get("url", "")
 
-    entry: dict[str, Any] = {"name": name, "source": source}
+    entry: dict[str, Any] = {"name": name}
+
+    # Curator-stated, not derived: it says which client releases can RUN the app,
+    # which only the release that shipped it knows. An older client still lists
+    # the app and tells the user to update, so the shelf is not pinned to the
+    # client's release cadence.
+    if min_client := authored.get("minClientVersion"):
+        entry["minClientVersion"] = min_client
 
     # Carried through verbatim, not derived: membership is ours to assign, and
     # reading it from the manifest would let an author place their own app.
@@ -882,7 +891,7 @@ def bake_entry(
         if not ref:
             continue
         if source_type != "builtin" and assets is not None:
-            ref = assets.add(source["url"], commit, ref, name, findings)
+            ref = assets.add(source_url, commit, ref, name, findings)
             if not ref:
                 continue
         entry[field] = ref
