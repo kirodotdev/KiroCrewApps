@@ -33,8 +33,11 @@ def write_pair(tmp_path: Path, registry: dict, editorial: dict) -> tuple[Path, P
     return reg, ed
 
 
-def app(name: str = "demo-app", ref: str = "main", categories=None) -> dict:
-    entry = {"name": name, "source": {"type": "git", "url": "https://example.com/a.git", "ref": ref}}
+def app(name: str = "demo-app", branch: str = "main", categories=None) -> dict:
+    entry = {
+        "name": name,
+        "source": {"type": "git", "url": "https://example.com/a.git", "branch": branch},
+    }
     if categories is not None:
         entry["categories"] = categories
     return entry
@@ -63,9 +66,14 @@ def test_accepts_empty_catalog(tmp_path):
     assert errors_for(tmp_path, base_registry(), base_editorial(categories=[])) == []
 
 
-def test_accepts_branch_ref_in_authored_input(tmp_path):
-    """A curator writes a branch; pinning to a commit is the pipeline's job."""
-    assert errors_for(tmp_path, base_registry(app(ref="main")), base_editorial()) == []
+def test_accepts_a_branch_in_authored_input(tmp_path):
+    """A curator writes the branch the client will clone and watch.
+
+    It is published verbatim: the pipeline resolves a commit to READ the
+    manifest and icons from one fixed tree, but publishing that commit would
+    break both install (`--branch` cannot take a commit id) and update
+    detection (which reads the branch tip)."""
+    assert errors_for(tmp_path, base_registry(app(branch="main")), base_editorial()) == []
 
 
 def test_accepts_app_with_category_membership(tmp_path):
@@ -501,18 +509,62 @@ def published_errors(doc: dict) -> list[str]:
     return [e.message for e in Draft202012Validator(schema).iter_errors(doc)]
 
 
-def test_published_schema_rejects_mutable_ref():
-    """A signed index naming 'main' signs nothing about the bytes."""
-    assert published_errors({"schemaVersion": 1, "apps": [app(ref="main")]}) != []
+def test_published_schema_requires_a_branch():
+    """The published git row is what the client installs from, so it names a
+    branch: `git clone --branch` cannot take a commit id, and update detection
+    compares the version at the branch tip against the installed one."""
+    assert published_errors({"schemaVersion": 1, "apps": [app(branch="main")]}) == []
+    assert published_errors({"schemaVersion": 1, "apps": [app(branch="release/2026-08")]}) == []
 
 
-def test_published_schema_accepts_commit_ref():
-    assert published_errors({"schemaVersion": 1, "apps": [app(ref="a" * 40)]}) == []
+def test_published_schema_rejects_a_coordinate_free_git_row():
+    """A git row with nothing to clone from is not installable."""
+    entry = {"name": "demo-app", "source": {"type": "git", "url": "https://x/a.git"}}
+    assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
+
+
+@pytest.mark.parametrize(
+    "branch",
+    [
+        "-b",  # argument injection into the git invocation
+        "--upload-pack=sh",
+        "/main",  # leading slash
+        "main/",  # trailing slash: git refuses it
+        "main.lock",  # git refuses the .lock suffix
+        "a..b",  # not a valid ref name, and traversal-shaped
+        "../etc",
+        "a//b",  # empty path segment
+        "main branch",  # space
+        "main\tx",  # control character
+        "main\n",  # trailing newline -- `$` admits it in Python's re, not in ECMA-262
+        "main\n../etc",
+        "ma~in",  # git ref metacharacters
+        "ma^in",
+        "ma:in",
+        "ma?in",
+        "ma*in",  # glob metacharacters
+        "ma[in",
+        "back\\slash",
+        "a" * 256,  # over maxLength
+        "",
+    ],
+)
+def test_published_schema_rejects_a_hazardous_branch(branch):
+    """The value reaches `git clone --branch` on a user's machine.
+
+    Each case is a distinct hazard, not a variation on one: option-shaped values
+    inject arguments, the git ref grammar forbids the metacharacters and the
+    slash/.lock forms outright, and the newline cases are the engine-difference
+    class tracked in KiroCrewApps#16 -- `$` matches before a trailing newline in
+    Python's `re` but not in ECMA-262, which JSON Schema specifies.
+    """
+    entry = {"name": "demo-app", "source": {"type": "git", "url": "https://x/a.git", "branch": branch}}
+    assert published_errors({"schemaVersion": 1, "apps": [entry]}) != [], branch
 
 
 def test_published_schema_rejects_bare_string_author():
     """author is a struct; a bare string cannot carry a URL or person/org kind."""
-    entry = app(ref="a" * 40)
+    entry = app()
     entry["author"] = "kirocrew"
     assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
 
@@ -526,7 +578,7 @@ def test_published_schema_rejects_digestless_archive():
 def test_published_schema_rejects_mixed_source_variants():
     entry = {
         "name": "demo-app",
-        "source": {"type": "git", "url": "https://x/a.git", "ref": "a" * 40, "sha256": "b" * 64},
+        "source": {"type": "git", "url": "https://x/a.git", "branch": "main", "sha256": "b" * 64},
     }
     assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
 
@@ -649,12 +701,12 @@ def test_rejects_non_https_git_url(tmp_path, url):
     this field at `minLength: 1` contradicted it -- and the trusted-host gate
     that was supposed to cover it lives in a client that does not exist yet.
     """
-    entry = {"name": "demo-app", "source": {"type": "git", "url": url, "ref": "main"}}
+    entry = {"name": "demo-app", "source": {"type": "git", "url": url, "branch": "main"}}
     assert errors_for(tmp_path, base_registry(entry), base_editorial()) != [], url
 
 
 def test_published_schema_also_rejects_non_https_git_url():
-    entry = {"name": "demo-app", "source": {"type": "git", "url": "ext::sh -c id", "ref": "a" * 40}}
+    entry = {"name": "demo-app", "source": {"type": "git", "url": "ext::sh -c id", "branch": "main"}}
     assert published_errors({"schemaVersion": 1, "apps": [entry]}) != []
 
 
@@ -666,14 +718,14 @@ def test_published_schema_rejects_bare_array():
     it did not match any format that ever existed on disk anyway.
     """
     assert published_errors([]) != []
-    assert published_errors([{"name": "demo-app", "source": {"type": "git", "url": "https://x/a.git", "ref": "a" * 40}}]) != []
+    assert published_errors([{"name": "demo-app", "source": {"type": "git", "url": "https://x/a.git", "branch": "main"}}]) != []
 
 
 def test_rejects_empty_subdir(tmp_path):
     """Omit the field rather than passing "" -- an empty segment is not a path."""
     entry = {
         "name": "demo-app",
-        "source": {"type": "git", "url": "https://x/a.git", "ref": "main", "subdir": ""},
+        "source": {"type": "git", "url": "https://x/a.git", "branch": "main", "subdirectory": ""},
     }
     assert errors_for(tmp_path, base_registry(entry), base_editorial()) != []
 
@@ -863,9 +915,15 @@ def test_rejects_a_builtin_carrying_a_top_level_url(tmp_path):
     assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
 
 
-def test_rejects_a_builtin_carrying_a_top_level_ref(tmp_path):
+@pytest.mark.parametrize("key,value", [("ref", "a" * 40), ("branch", "main"), ("subdirectory", "apps/x")])
+def test_rejects_a_builtin_carrying_a_top_level_fetch_coordinate(tmp_path, key, value):
+    """Every coordinate name is refused, not just the one that existed first.
+
+    `additionalProperties` is closed on the builtin variant, so this holds for
+    any key the git variant gains later -- but naming the current three keeps
+    the guarantee legible to a reader of the test."""
     entry = builtin()
-    entry["source"]["ref"] = "a" * 40
+    entry["source"][key] = value
     assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
 
 

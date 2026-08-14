@@ -47,11 +47,27 @@ would break one of them:
 
 |  | Authored | Published |
 |---|---|---|
-| `source.ref` | commit, **branch, or tag** | immutable commit only |
+| `source.branch` | written by the curator | **same value, verbatim** |
+| `source.manifestFrom` (built-ins) | required, pins a commit | **stripped** |
 | Display fields (`displayName`, `summary`, `author`, `tags`, …) | **forbidden** | present, generated |
 | `generatedAt` / `revision` | forbidden | stamped by CI |
 
-A curator writes a branch because pinning is the pipeline's job, not a human's.
+The install coordinates pass through unchanged, because the published document is
+what a client installs from: it clones with `git clone --branch <value>`, and it
+detects an update by comparing the version at that branch's tip against the
+installed one. Publishing a resolved commit instead breaks both — measured on the
+two real third-party repos in this catalog, `--branch <40-char commit>` exits
+**128** (`fatal: Remote branch ... not found`) — and it would freeze each app at
+its curated revision until a curator opened a PR.
+
+The pipeline still resolves the branch to a commit and verifies `HEAD` matches it.
+That commit governs which bytes are READ for display fields and icons, so one
+publish is reproducible; it stops there rather than being published.
+
+`manifestFrom` is the opposite case and keeps its commit: it is publish-time only,
+naming the tree a built-in's `app.json` is read from, and a moving branch there
+would make a publish irreproducible.
+
 Display fields are forbidden in authored input so *generated, never authored* is
 machine-checked rather than a convention someone remembers — they are baked from
 each app's own `app.json` at publish time, and therefore cannot drift from the
@@ -72,7 +88,7 @@ python tools/validate.py    # same verdict CI will give
 Adding an app is two fields:
 
 ```json
-{ "name": "my-app", "source": { "type": "git", "url": "https://github.com/org/my-app.git", "ref": "main" } }
+{ "name": "my-app", "source": { "type": "git", "url": "https://github.com/org/my-app.git", "branch": "main" } }
 ```
 
 Then set `"categories": ["my-category"]` on the app's own entry in

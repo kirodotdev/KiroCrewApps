@@ -8,7 +8,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/kirodotdev/KiroCrewApp-OncallRadar.git",
-        "ref": "3f2a1c9b7e4d5a6081c2f3049e8b7a6d5c4b3a29"
+        "branch": "main"
       },
       "displayName": "Oncall Radar",
       "summary": "Surfaces your open pages and shift handoffs in one place.",
@@ -35,8 +35,8 @@
       "source": {
         "type": "git",
         "url": "https://github.com/kirodotdev/KiroCrewApp-PptxMaker.git",
-        "ref": "b7d1e08429c5f3a6b0d2e4c8197f3a5b6d0c2e41",
-        "subdir": "app"
+        "branch": "release/2026-08",
+        "subdirectory": "app"
       },
       "displayName": "Deck Maker",
       "summary": "Turns an outline into a slide deck you can edit.",
@@ -62,7 +62,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/acme/standup-zen.git",
-        "ref": "5c9a2f14e8b06d3a7c1f5e920b8d4a6c3e7f1b05"
+        "branch": "main"
       },
       "displayName": "Standup Zen",
       "summary": "Collects yesterday/today/blockers and posts the digest.",
@@ -82,7 +82,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/kirodotdev/KiroCrewApp-Mindcraft.git",
-        "ref": "7d1e4f8a2b6c093d5e7a1f4b8c2d6e0a9b3c5d71"
+        "branch": "trunk"
       },
       "displayName": "Mindcraft",
       "summary": "Sketch and refine ideas on an infinite canvas.",

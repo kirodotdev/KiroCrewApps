@@ -6,7 +6,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/launchdarkly-labs/launchdarkly-kiro-crew-app",
-        "ref": "main"
+        "branch": "main"
       },
       "author": {
         "name": "LaunchDarkly Labs",
@@ -23,7 +23,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/qihang-dai/todo-ledger",
-        "ref": "release"
+        "branch": "release"
       },
       "author": {
         "name": "qihang-dai",

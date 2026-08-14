@@ -796,8 +796,14 @@ def bake_entry(
         # a clone target for code they already have. Same curator-only-then-
         # stripped pattern as `note`.
         source.pop("manifestFrom", None)
-    else:
-        source["ref"] = commit
+    # A git source publishes exactly what the curator wrote -- url, branch,
+    # subdirectory -- because those are the coordinates the client's install path
+    # reads. It does NOT publish the resolved commit: `git clone --branch` cannot
+    # take a commit id, and the client detects an update by comparing the version
+    # at the branch tip against the installed one, so a pin would freeze the app
+    # at its curated revision. *commit* is still resolved and verified, and is
+    # used below to read the manifest and icon blobs from the exact tree that was
+    # checked -- it just stops here.
 
     entry: dict[str, Any] = {"name": name, "source": source}
 
@@ -921,9 +927,19 @@ def build_registry(
         # A built-in has no fetch coordinates of its own -- it resolves from the
         # client's inventory -- so the manifest is read from the repository the
         # curator names in `manifestFrom`, which never reaches the published doc.
-        origin = source["manifestFrom"] if source.get("type") == "builtin" else source
-        commit = resolver(origin["url"], origin["ref"])
-        manifest = fetcher(origin["url"], commit, origin.get("subdir"))
+        #
+        # The two blocks name the same three facts with different keys, and that
+        # is deliberate rather than an inconsistency to unify: `manifestFrom` is
+        # PUBLISH-TIME only and pins a commit, because reading display fields from
+        # a moving branch would make one publish irreproducible. A git `source` is
+        # what the CLIENT installs from, so it names a branch -- the client cannot
+        # clone a commit id and detects updates from the branch tip.
+        builtin = source.get("type") == "builtin"
+        origin = source["manifestFrom"] if builtin else source
+        want = origin["ref"] if builtin else origin["branch"]
+        subdir = origin.get("subdir") if builtin else origin.get("subdirectory")
+        commit = resolver(origin["url"], want)
+        manifest = fetcher(origin["url"], commit, subdir)
         apps.append(bake_entry(authored_entry, manifest, commit, findings, assets))
 
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")

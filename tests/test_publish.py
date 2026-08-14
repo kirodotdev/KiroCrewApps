@@ -196,15 +196,16 @@ def test_moved_ref_is_caught(tmp_path, allow_local_urls, monkeypatch):
 # --------------------------------------------------------------------------
 
 
-def authored(name="demo-app", url="https://example.com/a.git", ref="main"):
-    return {"name": name, "source": {"type": "git", "url": url, "ref": ref}}
+def authored(name="demo-app", url="https://example.com/a.git", branch="main"):
+    return {"name": name, "source": {"type": "git", "url": url, "branch": branch}}
 
 
 def test_bakes_generated_fields():
     findings = Findings()
     entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings)
 
-    assert entry["source"]["ref"] == "a" * 40, "the pin must be the resolved commit"
+    assert entry["source"]["branch"] == "main", "the curator's branch is published verbatim"
+    assert "ref" not in entry["source"], "the resolved commit is read from, never published"
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
     assert entry["author"] == {"name": "Demo Labs"}
@@ -576,7 +577,7 @@ def build(authored_doc, tmp_path, allow_local=True):
 def test_built_document_satisfies_the_published_schema(tmp_path, allow_local_urls):
     doc, findings, commit = build({"schemaVersion": 1, "apps": [authored()]}, tmp_path)
     assert findings.errors == []
-    assert doc["apps"][0]["source"]["ref"] == commit
+    assert doc["apps"][0]["source"]["branch"] == "main"
 
     # The published schema requires an https url, and these tests deliberately
     # build from a local repo. Swap the transport back before checking shape --
@@ -654,7 +655,7 @@ def test_revision_is_derived_from_content(tmp_path, allow_local_urls):
 def _bake(url: str, author, name: str = "some-app", curated=None):
     """Bake one entry, as build_registry would. Returns (entry, findings)."""
     findings = publish.Findings()
-    authored = {"name": name, "source": {"type": "git", "url": url, "ref": "main"}}
+    authored = {"name": name, "source": {"type": "git", "url": url, "branch": "main"}}
     if curated is not None:
         authored["author"] = curated
     entry = publish.bake_entry(
@@ -1017,7 +1018,7 @@ def test_the_real_launchdarkly_app_is_publishable_but_unattributed():
     )
     assert "author" not in entry
     assert findings.errors == []
-    assert entry["source"]["ref"] == "0" * 40, "still pinned to the resolved commit"
+    assert entry["source"]["branch"] == "main", "still carries the branch to clone"
 
 
 def test_structured_author_objects_are_checked_too():
@@ -1076,7 +1077,7 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
             {
                 "schemaVersion": 1,
                 "apps": [{"name": "demo-app",
-                          "source": {"type": "git", "url": str(repo), "ref": "main"}}],
+                          "source": {"type": "git", "url": str(repo), "branch": "main"}}],
             },
             indent=2,
         )
@@ -1129,7 +1130,8 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
 
     registry = json.loads((out / "official-registry.json").read_text())
     entry = registry["apps"][0]
-    assert entry["source"]["ref"] == commit, "must be pinned to the resolved commit"
+    assert entry["source"]["branch"] == "main", "the signed row carries the branch to clone"
+    assert "ref" not in entry["source"], "and not the commit it was read at"
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
     assert entry["author"] == {"name": "Demo Labs"}
