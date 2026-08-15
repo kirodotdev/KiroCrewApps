@@ -192,12 +192,20 @@ def reset_repo_cache() -> None:
 
 
 def fetched_repo(url: str, commit: str) -> Path:
-    """Shallow-fetch a repository at an exact commit. Cached per (url, commit).
+    """Fetch a repository at an exact commit. Cached per (url, commit).
 
-    Fetches shallowly and then verifies HEAD is the commit we resolved. That
-    check is the point: resolve-then-fetch is two round trips, and without it a
-    ref that moves in between would silently publish different bytes than the
-    ones the commit id claims.
+    Fetches as a blobless partial clone (``--filter=blob:none``): only the commit
+    and tree come down, and each file blob is fetched on demand by ``git show``
+    and ``cat-file`` below. Reading a few manifests and icons out of a
+    many-megabyte repository therefore costs a few hundred kilobytes instead of
+    the whole working tree. A server without partial-clone support ignores the
+    filter and serves a full shallow fetch, so the fallback behavior is
+    unchanged.
+
+    Either way the fetch verifies HEAD is the commit we resolved. That check is
+    the point: resolve-then-fetch is two round trips, and without it a ref that
+    moves in between would silently publish different bytes than the ones the
+    commit id claims.
     """
     require_https(url)
     if hit := _REPO_CACHE.get((url, commit)):
@@ -223,13 +231,13 @@ def fetched_repo(url: str, commit: str) -> Path:
             # allow SHA1-in-want; fall back to a shallow clone below.
             run_git(["init", "--quiet", str(repo)])
             run_git(["remote", "add", "origin", url], cwd=repo)
-            run_git(["fetch", "--depth", "1", "--quiet", "origin", commit], cwd=repo)
+            run_git(["fetch", "--depth", "1", "--filter=blob:none", "--quiet", "origin", commit], cwd=repo)
             head = run_git(["rev-parse", "FETCH_HEAD"], cwd=repo).strip()
         except PublishError:
             # A separate directory: `init` above already populated the first one,
             # and git refuses to clone into a non-empty destination.
             repo = tmp / "cloned"
-            run_git(["clone", "--depth", "1", "--quiet", url, str(repo)])
+            run_git(["clone", "--depth", "1", "--filter=blob:none", "--no-checkout", "--quiet", url, str(repo)])
             head = run_git(["rev-parse", "HEAD"], cwd=repo).strip()
 
         if head != commit:
