@@ -7,6 +7,13 @@ This repository holds **data and its contract**, not code. Clients fetch the
 published output at runtime, which is the point: the storefront changes when
 this repository changes, with no client release.
 
+The published catalog is the store's **inventory, not just its copy**: a
+KiroCrew client installs a `git`-source entry by fetching exactly the commit the
+published document pins (`source.ref`), and reads update availability from the
+entry's `version` field rather than any branch tip. Publishing a new entry here
+is what makes a third-party app installable — previously that required shipping
+a KiroCrew release with an updated bundled seed.
+
 Design rationale lives in `docs/request-for-change/rfc-appstore-official-registry.md`
 in the KiroCrew repository. This README covers the mechanics.
 
@@ -52,6 +59,10 @@ would break one of them:
 | `generatedAt` / `revision` | forbidden | stamped by CI |
 
 A curator writes a branch because pinning is the pipeline's job, not a human's.
+The pin is load-bearing on the client side: an install fetches that exact commit
+and hard-fails on any mismatch (there is no branch fallback), so "revision N of
+the catalog" delivers the same bytes to every user, with the published `version`
+field — not a branch tip — carrying the update signal.
 Display fields are forbidden in authored input so *generated, never authored* is
 machine-checked rather than a convention someone remembers — they are baked from
 each app's own `app.json` at publish time, and therefore cannot drift from the
@@ -115,11 +126,23 @@ what it already has. Removal is positive data, so add a tombstone to `removed`:
 `advice` says what to do about an already-installed copy. It defaults to `keep`;
 only a yank escalates to `uninstall`.
 
+> **Operational note — current KiroCrew clients refuse tombstones outright.**
+> The shipped client implements no tombstone resolution (date precedence,
+> reinstatement clearing, the fail-closed tie rule), and implementing half of
+> that mechanism would be worse than none: a withdrawn app must never render
+> because the resolver was partial. So a published document carrying a
+> non-empty `removed` or `reinstated` list is refused as a whole and the client
+> falls back to its bundled seed — publishing the first tombstone today would
+> degrade every store to offline listings, not hide one app. Land tombstone
+> resolution in the client (or delete the mechanism from this contract) before
+> publishing one.
+
 ### `advice` is a remote instruction — two rules for whoever writes the client
 
 `advice: "uninstall"` is a fetched document telling a client to remove software
 the user already has installed. That is a kill switch, and it is worth writing
-the constraints down here because the client read path does not exist yet and
+the constraints down here because the `advice` read path still does not exist
+(clients today refuse the whole document instead — see the note above) and
 this contract is what its author will read as the spec:
 
 1. **A client must not act on `advice` from an unsigned document.** A signature
