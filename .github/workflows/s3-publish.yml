@@ -1,0 +1,181 @@
+name: Publish catalog to S3
+
+# Pushes the signed catalog to S3. A CDN in front of the bucket comes later; the
+# object layout below is chosen so that adding one does not require changing
+# either the paths or the client.
+#
+# Requires three repository variables. If any is unset the run FAILS rather than
+# quietly doing nothing -- a green "Publish catalog to S3" that published nothing
+# is worse than a red one, because the tick is the only signal most readers ever
+# look at:
+#   AWS_ROLE_ARN         - role assumed via GitHub OIDC (see docs/distribution.md)
+#   CATALOG_BUCKET       - destination bucket
+#   REGISTRY_KMS_KEY_ID  - KMS signing key id, ARN or alias
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "catalog/**"
+      - "schema/**"
+      - "keys/**"
+      - "tools/**"
+      - ".github/workflows/s3-publish.yml"
+
+# id-token is what lets the job assume the role without a stored access key.
+# Long-lived AWS keys in secrets are the thing this avoids.
+permissions:
+  contents: read
+  id-token: write
+
+# A publish is read-modify-write on the rolling pointer, so overlapping runs
+# could interleave and leave the pointer describing neither revision. Never
+# cancel one midway either: a cancelled run can leave the immutable copy present
+# but the pointer stale.
+concurrency:
+  group: s3-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check distribution is configured
+        env:
+          ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+          KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
+        run: |
+          # Missing configuration FAILS the run. It used to skip every
+          # publishing step and exit 0, which reported success for a run that
+          # published nothing -- the one signal anybody reads, saying the
+          # opposite of what happened. Both triggers here mean "publish now"
+          # (a push to main that touched the catalog, or a human dispatching
+          # the workflow), so there is no context in which having nothing to do
+          # is the correct outcome.
+          missing=""
+          [ -n "${ROLE_ARN:-}" ]   || missing="$missing AWS_ROLE_ARN"
+          [ -n "${BUCKET:-}" ]     || missing="$missing CATALOG_BUCKET"
+          [ -n "${KMS_KEY_ID:-}" ] || missing="$missing REGISTRY_KMS_KEY_ID"
+          if [ -n "$missing" ]; then
+            echo "::error::Cannot publish: unset repository variable(s):${missing}." \
+                 "Set them under Settings > Secrets and variables > Actions > Variables." \
+                 "See docs/distribution.md for the bucket, role and signing key expected."
+            exit 1
+          fi
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r tools/requirements.txt pytest
+
+      # The artifact about to be signed is whatever is on disk now, so the gate
+      # runs here rather than trusting that main was green when it merged.
+      - name: Contract and pipeline tests
+        run: pytest tests/ -q
+
+      # Credentials are needed BEFORE publishing now, not only for the upload:
+      # signing is itself a KMS call. One role covers both -- signing and
+      # uploading run in this same job, on this same runner, so a second role
+      # would put two ARNs in one blast radius rather than isolating anything.
+      #
+      # us-west-2 serves both the signing key and the catalog bucket.
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: us-west-2
+
+      # No key material passes through the runner: the id names a key whose
+      # private half stays in KMS. The refusal to publish unsigned lives in
+      # publish.py, so it cannot be bypassed by invoking the tool another way.
+      - name: Publish (signed)
+        env:
+          KIROCREW_REGISTRY_KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
+        run: python tools/publish.py --out dist
+
+      # Verify against the PUBLIC key committed to this repository, not against
+      # the signer's own output. This is the check that catches a signature
+      # minted over different bytes than the file about to be uploaded.
+      - name: Verify signatures before upload
+        run: python tools/verify_dist.py dist
+
+      # Two-stage upload, and the ORDER matters.
+      #
+      # The immutable per-revision copy goes first, so the rolling pointer never
+      # names a revision that is not yet retrievable. A reader who follows the
+      # pointer mid-publish then gets the previous revision -- stale, but whole
+      # and correctly signed -- instead of a 404.
+      #
+      # Per-revision objects are write-once and cached hard. Re-publishing a
+      # revision key with different bytes is what causes edge caches to disagree:
+      # some serve old bytes while a fresh pointer advertises the new digest, and
+      # signature checks then fail for some readers and not others. The revision
+      # id is content-derived, so identical content reuses the key harmlessly and
+      # changed content gets a new one.
+      - name: Upload immutable revision
+        env:
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+        run: |
+          REV="$(python -c "import json;print(json.load(open('dist/official-registry.json'))['revision'])")"
+          echo "revision=$REV"
+          # Assets go up BEFORE the document that names them. The document is the
+          # only thing that makes an icon reachable, so publishing it first opens
+          # a window where a client resolves a path whose bytes are not there
+          # yet -- and if the asset step then fails, the signed document is
+          # already live pointing at a 404. Uploading first is safe in a way the
+          # reverse is not: the filename is the sha256 of the contents, so an
+          # asset nothing references yet is inert, re-uploading is idempotent,
+          # and a new digest can never overwrite an old one.
+          ./.github/scripts/upload-assets.sh "s3://${BUCKET}/revisions/${REV}/"
+          # Documents and sidecars only. `--content-type` applies to EVERY object
+          # a sync uploads, so hosted icons must not ride along in this call --
+          # a PNG served as application/json does not render in an <img>.
+          aws s3 sync dist "s3://${BUCKET}/revisions/${REV}/" \
+            --exclude "index.html" \
+            --exclude "assets/*" \
+            --cache-control "public, max-age=31536000, immutable" \
+            --content-type "application/json" \
+            --no-progress
+          echo "REV=$REV" >> "$GITHUB_ENV"
+
+      # The rolling pointer clients actually fetch. no-store because a cached
+      # pointer is exactly how a client keeps missing a tombstone -- and a
+      # withdrawn app that stays visible is the failure this catalog is built to
+      # avoid.
+      - name: Update rolling pointer
+        env:
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+        run: |
+          # Same ordering rule as the immutable revision: bytes before the
+          # document that names them. Icons keep the immutable policy even under
+          # the rolling pointer -- the filename is the sha256 of the bytes, so
+          # the URL can never mean something else, and no-store here would
+          # refetch every icon on every load.
+          ./.github/scripts/upload-assets.sh "s3://${BUCKET}/"
+          aws s3 sync dist "s3://${BUCKET}/" \
+            --exclude "index.html" \
+            --exclude "assets/*" \
+            --cache-control "no-store, max-age=0" \
+            --content-type "application/json" \
+            --no-progress
+          aws s3 cp keys "s3://${BUCKET}/keys/" --recursive \
+            --cache-control "public, max-age=300" --no-progress
+
+      - name: Report the URLs
+        env:
+          BUCKET: ${{ vars.CATALOG_BUCKET }}
+        run: |
+          {
+            echo "### Catalog published"
+            echo
+            echo "Revision \`${REV}\`"
+            echo
+            echo '```'
+            echo "https://apps.crew.kiro.dev/official-registry.json"
+            echo "https://apps.crew.kiro.dev/revisions/${REV}/official-registry.json"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

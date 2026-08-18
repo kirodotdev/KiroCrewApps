@@ -1,0 +1,19 @@
+KiroCrewApps
+Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+
+This product includes software developed at
+Amazon.com, Inc. (https://www.amazon.com/).
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+This repository vendors no third-party code. The publish tooling declares its
+dependencies in tools/requirements.txt and they are installed, not bundled, so
+each carries its own license from its own distribution.
+
+The catalog references third-party applications by repository URL. Those
+applications are not part of this repository and are not covered by this
+license; each is governed by the terms of its own repository.

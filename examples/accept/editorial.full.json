@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "minClientVersion": "0.1.2",
+  "generatedAt": "2026-07-30T19:20:00Z",
+  "revision": "2026-07-30T19:20:00Z-a91f3c2",
+  "categories": [
+    {
+      "id": "ops",
+      "label": "Ops",
+      "order": 10
+    },
+    {
+      "id": "productivity",
+      "label": "Productivity",
+      "order": 20
+    },
+    {
+      "id": "writing",
+      "label": "Writing",
+      "order": 30
+    },
+    {
+      "id": "fun",
+      "label": "Fun",
+      "order": 40
+    }
+  ],
+  "sections": [
+    {
+      "type": "app",
+      "appRef": "oncall-radar",
+      "blurb": "Every page, shift and handoff on one screen.",
+      "artwork": {
+        "ref": "art/spotlight-oncall.png",
+        "refDark": "art/spotlight-oncall-dark.png",
+        "alt": "An on-call dashboard with one active page and a quiet timeline."
+      }
+    },
+    {
+      "type": "collection",
+      "title": "Ship a deck before lunch",
+      "appRefs": [
+        "pptx-maker",
+        "oncall-radar"
+      ],
+      "blurb": "A theme is what makes two unrelated apps belong on one card.",
+      "artwork": {
+        "ref": "art/spotlight-collection.webp"
+      }
+    }
+  ]
+}

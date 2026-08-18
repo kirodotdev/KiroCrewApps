@@ -1,0 +1,132 @@
+{
+  "schemaVersion": 1,
+  "generatedAt": "2026-07-30T19:20:00Z",
+  "revision": "2026-07-30T19:20:00Z-a91f3c2",
+  "apps": [
+    {
+      "name": "oncall-radar",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/kirodotdev/KiroCrewApp-OncallRadar.git",
+        "ref": "3f2a1c9b7e4d5a6081c2f3049e8b7a6d5c4b3a29"
+      },
+      "displayName": "Oncall Radar",
+      "summary": "Surfaces your open pages and shift handoffs in one place.",
+      "author": {
+        "name": "kirodotdev",
+        "url": "https://github.com/kirodotdev",
+        "kind": "org"
+      },
+      "tags": [
+        "oncall",
+        "alerts"
+      ],
+      "searchAliases": [
+        "pager",
+        "pagerduty",
+        "on-call"
+      ],
+      "version": "1.2.0",
+      "iconRef": "icons/oncall-radar.png",
+      "heroRef": "heroes/oncall-radar-16x9.png"
+    },
+    {
+      "name": "pptx-maker",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/kirodotdev/KiroCrewApp-PptxMaker.git",
+        "ref": "b7d1e08429c5f3a6b0d2e4c8197f3a5b6d0c2e41",
+        "subdir": "app"
+      },
+      "displayName": "Deck Maker",
+      "summary": "Turns an outline into a slide deck you can edit.",
+      "author": {
+        "name": "kirodotdev",
+        "url": "https://github.com/kirodotdev",
+        "kind": "org"
+      },
+      "tags": [
+        "slides",
+        "export"
+      ],
+      "searchAliases": [
+        "deck",
+        "powerpoint",
+        "keynote"
+      ],
+      "version": "0.4.1",
+      "iconRef": "icons/pptx-maker.png"
+    },
+    {
+      "name": "standup-zen",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/acme/standup-zen.git",
+        "ref": "5c9a2f14e8b06d3a7c1f5e920b8d4a6c3e7f1b05"
+      },
+      "displayName": "Standup Zen",
+      "summary": "Collects yesterday/today/blockers and posts the digest.",
+      "author": {
+        "name": "Ada Lovelace",
+        "url": "https://ada.example",
+        "kind": "person"
+      },
+      "tags": [
+        "standup",
+        "digest"
+      ],
+      "version": "2.0.0"
+    },
+    {
+      "name": "mindcraft",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/kirodotdev/KiroCrewApp-Mindcraft.git",
+        "ref": "7d1e4f8a2b6c093d5e7a1f4b8c2d6e0a9b3c5d71"
+      },
+      "displayName": "Mindcraft",
+      "summary": "Sketch and refine ideas on an infinite canvas.",
+      "author": {
+        "name": "kirodotdev",
+        "url": "https://github.com/kirodotdev",
+        "kind": "org"
+      },
+      "tags": [
+        "writing",
+        "research"
+      ],
+      "version": "0.9.4"
+    }
+  ],
+  "removed": [
+    {
+      "name": "weblab-reaper",
+      "reason": "superseded",
+      "since": "2026-07-20",
+      "note": "Folded into Oncall Radar.",
+      "replacedBy": "oncall-radar",
+      "advice": "keep"
+    },
+    {
+      "name": "quick-notes",
+      "reason": "malicious",
+      "since": "2026-07-28",
+      "note": "Published a build that exfiltrated environment variables.",
+      "advice": "uninstall"
+    },
+    {
+      "name": "mindcraft",
+      "reason": "withdrawn",
+      "since": "2026-06-10",
+      "note": "Maintainer went inactive; withdrawn pending an audit.",
+      "advice": "keep"
+    }
+  ],
+  "reinstated": [
+    {
+      "name": "mindcraft",
+      "since": "2026-07-25",
+      "note": "Maintainer returned; audit passed."
+    }
+  ]
+}

@@ -1,0 +1,161 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.crew.kiro.dev/appstore/editorial-v1.schema.json",
+  "title": "KiroCrew App Store editorial feed",
+  "description": "Everything about how the store PRESENTS apps: the category taxonomy, which apps are in which category, and the Discover layout. Only REFERENCES apps by name -- app data always resolves through the registry, so editorial can never inject a phantom or spoofed app. Read tolerantly: unknown section types are skipped, and a section that fails validation is dropped individually rather than failing the page.",
+
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion"],
+
+  "properties": {
+    "schemaVersion": {
+      "description": "Integer major. Additive-only within a major: new fields are optional and existing fields never change meaning. A major the client does not support triggers FULL fallback (cache -> bundled snapshot -> built-in heuristic), not a partial render.\n\nONE CARVE-OUT, and it is narrow: a `sections` VARIANT that has never appeared in a published document may be removed, or have its bounds tightened, without a major bump. Compatibility is a promise to consumers, and a variant no client can ever have read has none -- the CDN's own history is the evidence. It does not extend to a variant that shipped even once, nor to any field of `categories`, which has been published since the first revision.",
+      "type": "integer",
+      "const": 1
+    },
+    "minClientVersion": {
+      "description": "Independent of the schema major. Lets the server force older clients onto their bundled default when a doc relies on behavior they lack. A client below this ignores the document entirely.",
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+"
+    },
+    "generatedAt": { "type": "string", "format": "date-time" },
+    "revision": { "type": "string", "minLength": 1 },
+
+    "categories": {
+      "description": "The category taxonomy: ids, display labels and rail order. MEMBERSHIP is not here -- it is stated on the registry entry, so an app and its placement are one edit and a reference to an app that does not exist is unrepresentable. `order` drives the rail sequence; there is no separate ordering section. An app in no category falls into a default bucket and is never hidden; membership is single-valued by construction (an app appearing in two categories is a curation error the publish step rejects), because a partitioned rail is the whole point -- an app that belongs in more than one place is served by a `collection` section or by search keywords, neither of which touches the taxonomy.\n\nThis list is the ONLY place the category vocabulary is defined: the authored registry validates an app's category against this document rather than repeating the set in an enum, so adding a category is one edit here.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/category" },
+      "maxItems": 30
+    },
+
+    "sections": {
+      "description": "Ordered Discover layout. Data-driven, not a fixed template -- new layouts are new `type` values, which is what lets the store's appearance change without a client release.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/section" },
+      "maxItems": 40
+    }
+  },
+
+  "$defs": {
+    "appRef": {
+      "description": "Must resolve to a live, non-tombstoned entry in the merged registry. The publish pipeline enforces this; the client drops the reference if it does not resolve.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+
+    "category": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "label", "order"],
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+          "maxLength": 40
+        },
+        "label": {
+          "description": "Display string. Relabeling is a catalog edit, not a client release -- which is why nothing references a category by label.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 40
+        },
+        "order": {
+          "description": "Required, because an absent order has no defined placement: uniqueness can only be checked among the values that are present, so a category without one would land wherever array position happened to put it.",
+          "type": "integer"
+        }
+      }
+    },
+
+    "artwork": {
+      "description": "Editorial artwork for a section, authored by the CURATOR and hosted by the catalog. Shared across every section variant on purpose: artwork is orthogonal to what a section contains, so a future variant inherits it without touching this definition. Raster only -- an SVG is a script host, and a regex screen over untrusted XML was defeated three separate ways.\n\nTWO FORMS, ONE FIELD. Authored, `ref` is a path to a file in THIS repository (`art/spotlight-tasks.png`) -- the curator cannot know a digest that does not exist until publish runs. Published, the same key holds the content-addressed path the publish step emitted (`assets/editorial/<sha256>.png`), whose digest is covered by the document signature and is what gives a client end-to-end integrity for bytes carrying no signature of their own. The pattern below admits both because one schema validates both stages; `verify_dist` is what proves the published form is the addressed one.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ref"],
+      "properties": {
+        "ref": {
+          "description": "Light-appearance artwork. Required when `artwork` is present at all: a dark-only section would render nothing on the default appearance.",
+          "$ref": "#/$defs/assetRef"
+        },
+        "refDark": {
+          "description": "Optional dark-appearance variant. Absent means the light bytes are reused, which is why the light one is opaque by requirement.",
+          "$ref": "#/$defs/assetRef"
+        },
+        "alt": {
+          "description": "Accessible description. Absent is allowed and means the artwork is decorative -- the section's own title and blurb already name the content, so an empty alt is correct rather than lazy.",
+          "type": "string",
+          "maxLength": 200
+        }
+      }
+    },
+
+    "assetRef": {
+      "description": "A relative path, never an absolute URL and never a traversal: a curated feed must not be able to point the client's renderer at a third-party host, and the publish step must not be able to read outside the repository. Lowercase, single dots only, one extension.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9_-]*(?:/[a-z0-9][a-z0-9_-]*)*\\.[a-z0-9]+$",
+      "maxLength": 128
+    },
+
+    "section": {
+      "description": "Closed per known variant, but the CLIENT must skip an unrecognized `type` rather than reject the document. Validating strictly here is for the publish gate; the reader is deliberately more tolerant.\n\nEXTENDING THIS. A new presentation shape gets a NEW `type` value, never a sub-discriminator inside an existing variant: the client-side rule above makes an unknown `type` safe (skipped until support ships), whereas a flag inside an existing variant would make every older client render the new shape as a broken old one.\n\nA variant earns its place by having a SURFACE, not by being conceivable. Only add one when a client is ready to draw it -- a type with no renderer validates, publishes, and then silently vanishes into the reader's skip path, which looks exactly like a bug from the curator's side.",
+      "type": "object",
+      "oneOf": [
+        { "$ref": "#/$defs/sectionApp" },
+        { "$ref": "#/$defs/sectionCollection" }
+      ]
+    },
+
+    "sectionApp": {
+      "title": "app -- featured placement for ONE app",
+      "description": "The app's own name is the heading, so there is no `title`: a curator who wants to say something other than the app's name is describing a collection of one, and a collection is the variant that carries a theme.\n\nSeparate from `collection` because the two differ in what they REQUIRE, not merely in how many apps they hold: a collection is meaningless without a theme, and this variant is meaningless with one. Expressing both as a single variant with a variable-length list forces `title` to be optional everywhere and pushes 'required when more than one' into code the schema cannot see.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "appRef"],
+      "properties": {
+        "type": { "const": "app" },
+        "appRef": { "$ref": "#/$defs/appRef" },
+        "blurb": {
+          "description": "Overrides the app's registry description for this placement only. Absent means the registry description is used, which is the normal case -- an override is for when the editorial angle differs from how the author describes their own app.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "artwork": { "$ref": "#/$defs/artwork" }
+      }
+    },
+
+    "sectionCollection": {
+      "title": "collection -- several apps under a curator's theme",
+      "description": "`title` is REQUIRED: the theme is the entire reason several unrelated apps appear together, and an untitled collection gives the reader no way to understand why these apps share a card.\n\n`minItems` is 2 because a one-app collection is an `app` placement wearing a costume. `maxItems` is small because every member is RENDERED -- there is no collection detail page to hold an overflow, so a cap the card cannot draw would silently discard members that validated and published. Raising it requires giving the card somewhere to put them first.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "title", "appRefs"],
+      "properties": {
+        "type": { "const": "collection" },
+        "title": {
+          "description": "The curator's theme. Names why these apps belong together -- not a category name, which the taxonomy already covers.\n\nTwo INDEPENDENT assertions rather than one clever pattern. A title must contain a non-space character, because `minLength` counts BYTES while the client counts visible characters: a whitespace-only title passes the cross-document checks, publishes, and is then dropped by the client, so the card vanishes with no error at the gate and nothing in the client's log. It must also be ONE line, because HTML collapses a newline to a space, so a multi-line title would validate, sign, and render as something other than what was authored.\n\nBoth are written anchored, with `[\\s\\S]*` shoulders so they still mean CONTAINMENT. That spelling matters: `[\\s\\S]` matches every character including a line break, whereas the tempting `^\\S+$` rejects every title containing a space and a bare `^[^\\r\\n]*\\S[^\\r\\n]*$` still admits a trailing newline, because the Python validator this repository runs treats `$` as end-of-input OR just before a trailing `\\n` (ECMA-262 does not). The second assertion is negated, so its inner pattern must stay a containment test -- anchoring it tightly would flip its meaning from `contains a line break` to `IS a line break` and let `\"Theme\\n\"` through.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "allOf": [
+            { "pattern": "^[\\s\\S]*\\S[\\s\\S]*$" },
+            { "not": { "pattern": "^[\\s\\S]*[\\r\\n][\\s\\S]*$" } }
+          ]
+        },
+        "appRefs": {
+          "description": "Ordered. The card renders them in this sequence; there is no ranking, sorting or scoring applied on top, so the curator's order is what a reader sees.",
+          "type": "array",
+          "items": { "$ref": "#/$defs/appRef" },
+          "minItems": 2,
+          "maxItems": 6
+        },
+        "blurb": {
+          "description": "One line under the title. Absent is fine when the title carries the idea on its own.",
+          "type": "string",
+          "maxLength": 200
+        },
+        "artwork": { "$ref": "#/$defs/artwork" }
+      }
+    }
+  }
+}

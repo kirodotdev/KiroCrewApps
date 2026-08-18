@@ -1,0 +1,173 @@
+# Kiro Crew Apps Registry AutoSDE Rules
+#
+# Source of truth for what this repository considers a defect, and for whether
+# it blocks a merge. Both AI reviewers (claude-review.yml, codex-review.yml)
+# read these rules from the BASE commit, so a pull request cannot weaken the
+# rules that govern it.
+#
+# Every blocking rule below is backed by a defect that actually occurred in this
+# codebase, not by a general principle. The shape of this repository is what
+# makes them blocking: it produces ONE signed JSON document that every Kiro Crew
+# client fetches and trusts, and it builds that document by reading `app.json`
+# manifests out of third-party repositories we do not control. There is no
+# runtime to catch a mistake later -- a bad publish IS the storefront.
+#
+# `blocking: true` means a violation must be fixed before merge. A rule without
+# it is advisory: report it, do not block on it.
+
+custom-rules:
+  - id: registry-untrusted-manifest-handling
+    blocking: true
+    file-patterns:
+      - "tools/publish.py"
+    rule: |
+      Data read from an app's `app.json` is UNTRUSTED INPUT. Every manifest in
+      the catalog lives in a repository its own publisher controls, so a
+      manifest may be hostile, malformed, or merely sloppy -- and `publish.py`
+      builds ONE document from ALL of them, which is what makes a single bad
+      field everyone's problem.
+
+      - NOTHING read from a manifest may raise. A raise propagates out of
+        `publish()` and halts the entire run, so one publisher's broken file
+        stops EVERY app's release, including apps that are perfectly fine.
+        Degrade the one field instead, and emit a `findings.warn()` so the
+        degradation is visible rather than silent.
+      - `(manifest.get(k) or "").strip()` is NOT a total read and must not be
+        reintroduced. Falsy values (`None`, `0`, `""`) survive it while a truthy
+        non-string (`5`, `[1]`, `{"a": 1}`) reaches `.strip()` and raises
+        `AttributeError`. Read manifest strings through `manifest_str()`; a
+        function that accepts a manifest value must annotate it `Any` and handle
+        a non-string, never assume `str`.
+      - Type-safe is not schema-safe. A manifest-derived value that is a string
+        can still be ILLEGAL against the published schema (`kind: "wizard"`, an
+        81-character `author.name`, a `http://` url), and it then fails
+        validation on the ASSEMBLED document -- the same halt-the-fleet outcome
+        by a later route. Drop each optional field unless it is independently
+        valid against the published schema. Never truncate a value to fit a
+        limit where truncation changes its MEANING: an over-long author name
+        must be dropped, because a prefix attributes the app to a different
+        name than the one claimed.
+      - A manifest may NEVER assert a reserved author (`RESERVED_AUTHORS`).
+        Attribution in a document we sign has to be what WE state, and no
+        evidence inside a file we do not control can support the claim: a source
+        url does not survive normalization (`https://github.com/kirodotdev/../x`
+        satisfies a prefix test while git strips the dot segment and fetches
+        somewhere else, so the url CHECKED and the repository FETCHED are not
+        the same thing), and a `type` field is just a string a curator typed.
+        Do not reintroduce a url-prefix or source-type trust path. The curator
+        states `author` on the catalog entry; that is the only source.
+      - Compare a claimed name by what a READER would take it to say, via
+        `fold_author_name()`. A bare `casefold()` compares bytes where the
+        question is appearance, and lets `ＫｉｒｏＣｒｅｗ` (fullwidth),
+        `kiro<ZWSP>crew` and `kiro  crew` through.
+
+  - id: registry-signed-document-integrity
+    blocking: true
+    file-patterns:
+      - "tools/publish.py"
+      - "tools/verify_dist.py"
+      - "schema/*.json"
+    rule: |
+      The published document is signed and every client trusts it. Integrity
+      properties here are the product, not defensive extras.
+
+      - Signing FAILS CLOSED. With no key configured, publish must exit non-zero
+        and write nothing. Never add a local-key fallback, an unsigned-output
+        mode, or a flag that skips verification -- a client that accepts an
+        unsigned document cannot tell the catalog from an attacker's copy.
+      - The bytes written, hashed, and signed must come from ONE function
+        (`canonical_bytes`). A signature over differently-serialized bytes than
+        the file on disk verifies nothing.
+      - A published `source` must be immutably pinned: a full commit id, never a
+        branch or tag. A signed index naming `main` signs nothing about the
+        bytes a client will receive. `resolve_commit` -> fetch -> verify
+        `HEAD == commit` is a required sequence, and the object-type check
+        (`cat-file -t`) must stay: a tag object is also 40 hex characters.
+      - Every published `source` variant is a CLOSED discriminated union with
+        `additionalProperties: false`. Do not loosen one. Closure is what makes
+        an illegal shape unrepresentable rather than dependent on publish
+        remembering to strip it -- e.g. a `builtin` entry carrying a `url`,
+        `ref`, `manifestFrom` or `sha256` would hand a client a clone target for
+        code it already has.
+      - A schema `pattern` must be anchored at BOTH ends. An unanchored pattern
+        accepts a trailing payload that then gets signed and rendered. When
+        anchoring a version, accept full semver including prereleases:
+        `0.2.0-nightly.20260806t065257` is a real shipping version, and a
+        release-only pattern makes the earliest carrying release unnameable.
+      - Curator-only fields (`note`, `manifestFrom`) must be stripped at bake.
+        Adding a field to the authored schema without deciding whether it ships
+        is not complete.
+
+  - id: registry-git-invocation-hardening
+    blocking: true
+    file-patterns:
+      - "tools/publish.py"
+    rule: |
+      This tool fetches from remotes named in a data file, so `git` is the point
+      where untrusted input becomes execution.
+
+      - Re-check https AT THE POINT OF USE (`require_https`), not only in the
+        schema. A check that lives one layer up is a check a future caller can
+        skip.
+      - Preserve every flag in `GIT_HARDENING` and every var in `GIT_ENV`:
+        `protocol.ext.allow=never` (the `ext::` transport hands a command line to
+        a shell), `credential.helper=` and `core.askPass=` (no tier of this
+        registry confers clone credentials, so a fetch needing them must fail
+        rather than silently succeed as the CI runner), `submodule.recurse=false`
+        (submodules are a second, attacker-controlled url list), and
+        `GIT_ALLOW_PROTOCOL=https`. Relax them in TESTS only.
+      - Never build a git command by string interpolation, and never pass a
+        url or ref that could begin with `-` into a position where git reads it
+        as an argument.
+      - A `subdir` must stay contained: no absolute path, no `..`, no backslash,
+        no NUL. It becomes a filesystem path.
+      - A cached checkout must be released on every failure path, and a cleanup
+        that raises must never REPLACE the error that caused it: "the ref moved
+        during publish" is the diagnosis a curator needs, an rmtree failure is
+        not. Keep a checkout and its `TemporaryDirectory` in ONE structure --
+        two parallel ones let an eviction drop the only reachable path while
+        leaving the handle referenced until the process exits.
+
+  - id: registry-contract-tests-must-bite
+    blocking: false
+    file-patterns:
+      - "tests/**/*.py"
+    rule: |
+      This repository's tests exist to prove the gate still REJECTS what it is
+      supposed to reject. A validator exercised only against a valid catalog
+      would pass just as happily with every check deleted.
+
+      - A new gate, guard, or schema constraint needs a reject case that
+        provably FAILS without it. State the mutation the test catches.
+      - Watch for vacuous assertions -- a test that passes for a reason other
+        than the one it names. Two real examples from this codebase: a reject
+        case whose payload exceeded `maxLength` was rejected on LENGTH while
+        claiming to pin a `$` anchor; and a batch of reject cases that all
+        tripped an undeclared-category error instead of the constraint under
+        test. If a case can pass with the constraint removed, it pins nothing.
+      - Test BOTH directions. A pattern needs accept cases as well as reject
+        cases: anchoring a version pattern without an accept case is how a fix
+        shipped that rejected every real nightly build.
+      - Tests must not depend on the network or fetch a large remote repository
+        to exercise local logic, and must not depend on module state left by
+        another test. A warm cache can satisfy a later test's fetch and make an
+        assertion about a fetch FAILURE pass without the failure occurring.
+
+  - id: registry-catalog-data-is-curated
+    blocking: false
+    file-patterns:
+      - "catalog/*.json"
+    rule: |
+      The catalog is hand-edited data that ships to every client, and there is
+      no build step between this file and a user's store.
+
+      - Membership (`categories`) is ours to assign and is deliberately NOT read
+        from a manifest, or an author could self-promote into a curated category
+        by editing their own `app.json`. The first category is primary and
+        decides the rail, so the rails stay a partition.
+      - `author` on an entry is an ASSERTION we sign. State it explicitly for
+        any first-party app; do not expect a manifest to supply it.
+      - Keep the file normalized (`tools/format.py`), so a review diff shows the
+        semantic change rather than a reflow.
+      - An entry must not name a category that `editorial.json` does not
+        declare; that is checked cross-document at validation.

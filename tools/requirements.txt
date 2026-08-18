@@ -1,0 +1,16 @@
+# The [format] extra is REQUIRED, not a nicety: without rfc3339-validator and
+# rfc3986-validator, jsonschema silently skips the `date-time` and `uri` format
+# checks our schemas rely on, and CI would enforce less than it appears to.
+jsonschema[format]==4.26.0
+
+# Detached signatures for the published documents. A signature is the acceptance
+# gate for Official trust, so this is a hard dependency of publishing rather than
+# an optional extra. Still required after the move to KMS: KMS produces the
+# signature, but VERIFYING it before upload happens locally, against the public
+# keys committed to keys/.
+cryptography==50.0.0
+
+# Reaching the KMS signing key. The private half never leaves KMS, so publishing
+# cannot proceed without an AWS client -- there is no local-key fallback to
+# degrade to, by design.
+boto3==1.40.9
