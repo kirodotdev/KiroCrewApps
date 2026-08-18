@@ -4,13 +4,19 @@ name: Publish catalog to S3
 # object layout below is chosen so that adding one does not require changing
 # either the paths or the client.
 #
-# Requires three repository variables. If any is unset the run FAILS rather than
-# quietly doing nothing -- a green "Publish catalog to S3" that published nothing
-# is worse than a red one, because the tick is the only signal most readers ever
-# look at:
-#   AWS_ROLE_ARN         - role assumed via GitHub OIDC (see docs/distribution.md)
-#   CATALOG_BUCKET       - destination bucket
-#   REGISTRY_KMS_KEY_ID  - KMS signing key id, ARN or alias
+# Requires three pieces of configuration. If any is unset the run FAILS rather
+# than quietly doing nothing -- a green "Publish catalog to S3" that published
+# nothing is worse than a red one, because the tick is the only signal most
+# readers ever look at:
+#   AWS_ROLE_ARN         (secret)   - role assumed via GitHub OIDC (see docs/distribution.md)
+#   CATALOG_BUCKET       (secret)   - destination bucket
+#   REGISTRY_KMS_KEY_ID  (variable) - KMS signing key id, ARN or alias
+#
+# The first two are secrets, not variables, because a variable is interpolated
+# into logs verbatim and both values embed the AWS account id -- and on a public
+# repository run logs are world-readable. A secret is masked. The KMS key stays a
+# variable because an alias identifies no account. Nothing here needs a value in
+# a job-level `if:`, which is the one place the secrets context is unavailable.
 on:
   workflow_dispatch:
   push:
@@ -44,8 +50,8 @@ jobs:
 
       - name: Check distribution is configured
         env:
-          ROLE_ARN: ${{ vars.AWS_ROLE_ARN }}
-          BUCKET: ${{ vars.CATALOG_BUCKET }}
+          ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+          BUCKET: ${{ secrets.CATALOG_BUCKET }}
           KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
         run: |
           # Missing configuration FAILS the run. It used to skip every
@@ -60,8 +66,9 @@ jobs:
           [ -n "${BUCKET:-}" ]     || missing="$missing CATALOG_BUCKET"
           [ -n "${KMS_KEY_ID:-}" ] || missing="$missing REGISTRY_KMS_KEY_ID"
           if [ -n "$missing" ]; then
-            echo "::error::Cannot publish: unset repository variable(s):${missing}." \
-                 "Set them under Settings > Secrets and variables > Actions > Variables." \
+            echo "::error::Cannot publish: unset configuration:${missing}." \
+                 "AWS_ROLE_ARN and CATALOG_BUCKET are secrets, REGISTRY_KMS_KEY_ID is a" \
+                 "variable; both live under Settings > Secrets and variables > Actions." \
                  "See docs/distribution.md for the bucket, role and signing key expected."
             exit 1
           fi
@@ -86,7 +93,7 @@ jobs:
       # us-west-2 serves both the signing key and the catalog bucket.
       - uses: aws-actions/configure-aws-credentials@v4
         with:
-          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
           aws-region: us-west-2
 
       # No key material passes through the runner: the id names a key whose
@@ -118,7 +125,7 @@ jobs:
       # changed content gets a new one.
       - name: Upload immutable revision
         env:
-          BUCKET: ${{ vars.CATALOG_BUCKET }}
+          BUCKET: ${{ secrets.CATALOG_BUCKET }}
         run: |
           REV="$(python -c "import json;print(json.load(open('dist/official-registry.json'))['revision'])")"
           echo "revision=$REV"
@@ -148,7 +155,7 @@ jobs:
       # avoid.
       - name: Update rolling pointer
         env:
-          BUCKET: ${{ vars.CATALOG_BUCKET }}
+          BUCKET: ${{ secrets.CATALOG_BUCKET }}
         run: |
           # Same ordering rule as the immutable revision: bytes before the
           # document that names them. Icons keep the immutable policy even under
@@ -167,7 +174,7 @@ jobs:
 
       - name: Report the URLs
         env:
-          BUCKET: ${{ vars.CATALOG_BUCKET }}
+          BUCKET: ${{ secrets.CATALOG_BUCKET }}
         run: |
           {
             echo "### Catalog published"

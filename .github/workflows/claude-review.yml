@@ -37,14 +37,18 @@ jobs:
     # content is the prompt-injection surface this guard closes.
     #
     # There is deliberately NO credential predicate here. An earlier revision
-    # gated the job on `vars.AWS_BEDROCK_ROLE_ARN != ''` so an unconfigured lane
+    # gated the job on the role ARN being non-empty so an unconfigured lane
     # would record `skipped` rather than a green `success`. That reasoning was
     # half right and dangerous: GitHub treats a SKIPPED required check as
-    # SATISFIED for branch protection, so deleting the variable would silently
-    # disable review while the PR still looked mergeable -- a strictly worse
-    # failure than a red check. With no predicate, a missing role makes
+    # SATISFIED for branch protection, so clearing the configuration would
+    # silently disable review while the PR still looked mergeable -- a strictly
+    # worse failure than a red check. With no predicate, a missing role makes
     # configure-aws-credentials fail and the job goes RED, which is the only
     # state that cannot be mistaken for a completed review.
+    #
+    # A predicate is also no longer expressible: the ARN is a secret (it embeds
+    # the AWS account id, and a variable would appear unmasked in world-readable
+    # logs) and the secrets context is unavailable in a job-level `if:`.
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       # persist-credentials:false stops actions/checkout from writing the
@@ -72,7 +76,7 @@ jobs:
       # and sign with the registry KMS key.
       - uses: aws-actions/configure-aws-credentials@e6de054238d6b7531b4efff3b6587d9aade6a06c # v6.2.3
         with:
-          role-to-assume: ${{ vars.AWS_BEDROCK_ROLE_ARN }}
+          role-to-assume: ${{ secrets.AWS_BEDROCK_ROLE_ARN }}
           aws-region: us-west-2
 
       - name: Opus 5 review

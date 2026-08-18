@@ -37,7 +37,7 @@ distribution because the two have genuinely different needs:
 
 ## Account: same one, separate bucket, narrow role
 
-The bucket lives in **`kirocrew-publish` (116101834266)**, in its own bucket,
+The bucket lives in the **`kirocrew-publish`** account, in its own bucket,
 written by a role that can reach nothing else.
 
 Reasoning, since "separate account" is the obvious alternative:
@@ -145,7 +145,7 @@ repository **and** to `main`, so a fork or feature branch cannot assume it:
   "Version": "2012-10-17",
   "Statement": [{
     "Effect": "Allow",
-    "Principal": { "Federated": "arn:aws:iam::116101834266:oidc-provider/<gh-oidc-host>" },
+    "Principal": { "Federated": "arn:aws:iam::<account-id>:oidc-provider/<gh-oidc-host>" },
     "Action": "sts:AssumeRoleWithWebIdentity",
     "Condition": {
       "StringEquals": {
@@ -185,16 +185,29 @@ No `s3:DeleteObject`: publishing never needs to remove anything, and withholding
 it means a compromised workflow cannot erase published history. Retiring an app is
 a tombstone in the catalog, not a deletion.
 
-### 3. Repository variables
+### 3. Repository configuration
+
+The role ARN and the bucket name are **secrets**, not variables. Both embed the
+AWS account id, a variable is interpolated into logs verbatim, and run logs are
+world-readable on a public repository. The KMS key id stays a variable because an
+alias identifies no account.
 
 ```bash
-gh variable set CATALOG_BUCKET --repo kirodotdev/KiroCrewApps --body kirocrew-apps-catalog
-gh variable set AWS_ROLE_ARN   --repo kirodotdev/KiroCrewApps \
-  --body arn:aws:iam::116101834266:role/KiroCrewAppsCatalogPublisher
+gh secret   set CATALOG_BUCKET      --repo kirodotdev/KiroCrewApps --body '<bucket-name>'
+gh secret   set AWS_ROLE_ARN        --repo kirodotdev/KiroCrewApps --body '<publisher-role-arn>'
+gh variable set REGISTRY_KMS_KEY_ID --repo kirodotdev/KiroCrewApps --body 'alias/kirocrew-apps-registry'
 ```
 
-The workflow skips with a notice until both are set, so it will not fail
-obscurely in the meantime.
+Nothing here is read from a job-level `if:`, which is the one place the secrets
+context is unavailable — so making these secrets costs no expressiveness.
+
+With any of the three unset the workflow **fails**; it does not skip. Both of its
+triggers mean "publish now", so there is no context in which having nothing to do
+is the correct outcome, and a green check on a run that published nothing is worse
+than a red one.
+
+The two agentic review lanes read `AWS_BEDROCK_ROLE_ARN` and
+`AWS_CODEX_BEDROCK_ROLE_ARN` as secrets for the same reason.
 
 ### 4. Certificate, distribution, DNS
 
