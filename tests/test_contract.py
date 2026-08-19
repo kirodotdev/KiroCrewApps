@@ -69,6 +69,15 @@ def base_editorial(**extra) -> dict:
     return {"schemaVersion": 1, **extra}
 
 
+def full(*items: dict) -> dict:
+    """A `full` section. Takes *items so a wrong count can still be asserted on."""
+    return {"form": "full", "items": list(items)}
+
+
+def row(*items: dict) -> dict:
+    return {"form": "row", "items": list(items)}
+
+
 def errors_for(
     tmp_path: Path, registry: dict, editorial: dict, order: dict | None = None
 ) -> list[str]:
@@ -93,7 +102,7 @@ def test_accepts_branch_ref_in_authored_input(tmp_path):
 
 def test_accepts_app_with_category_membership(tmp_path):
     registry = base_registry(app("demo-app"))
-    editorial = base_editorial(sections=[{"type": "app", "appRef": "demo-app"}])
+    editorial = base_editorial(sections=[full({"type": "app", "appRef": "demo-app"})])
     order = base_order("developer-tools")
     assert errors_for(tmp_path, registry, editorial, order) == []
 
@@ -101,7 +110,7 @@ def test_accepts_app_with_category_membership(tmp_path):
 def test_accepts_same_app_in_category_and_section(tmp_path):
     """A rail is how an app appears twice WITHOUT a second category."""
     registry = base_registry(app("demo-app", categories=["productivity"]))
-    editorial = base_editorial(sections=[{"type": "app", "appRef": "demo-app"}])
+    editorial = base_editorial(sections=[full({"type": "app", "appRef": "demo-app"})])
     order = base_order("productivity")
     assert errors_for(tmp_path, registry, editorial, order) == []
 
@@ -193,7 +202,7 @@ def test_rejects_duplicate_app_name(tmp_path):
 
 def test_rejects_dangling_app_ref(tmp_path):
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "ghost-app"}]
+        sections=[full({"type": "app", "appRef": "ghost-app"})]
     )
     assert any("not declared" in e for e in errors_for(tmp_path, base_registry(), editorial))
 
@@ -217,7 +226,7 @@ def test_rejects_collection_with_a_multiline_title(tmp_path):
     for title in ("Ship it\nbefore lunch", "Theme\r\nmore", "ok\n\n\nmore", "Theme\n", "Theme\r\n", "\nTheme"):
         editorial = base_editorial(
             sections=[
-                {"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]}
+                full({"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]})
             ]
         )
         assert errors_for(tmp_path, registry, editorial) != [], repr(title)
@@ -233,7 +242,7 @@ def test_accepts_a_title_with_internal_spaces_and_punctuation(tmp_path):
     for title in ("Ship it before lunch", "On-call & Ops essentials", "Research + writing"):
         editorial = base_editorial(
             sections=[
-                {"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]}
+                full({"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]})
             ]
         )
         assert errors_for(tmp_path, registry, editorial) == [], repr(title)
@@ -252,7 +261,7 @@ def test_rejects_collection_with_a_whitespace_only_title(tmp_path):
     for title in (" ", "\t", "\n  "):
         editorial = base_editorial(
             sections=[
-                {"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]}
+                full({"type": "collection", "title": title, "appRefs": ["demo-app", "other-app"]})
             ]
         )
         assert errors_for(tmp_path, registry, editorial) != [], repr(title)
@@ -269,6 +278,83 @@ def test_rejects_collection_without_a_title(tmp_path):
     assert errors_for(tmp_path, registry, editorial) != []
 
 
+def test_rejects_a_full_section_holding_more_than_one_item(tmp_path):
+    """`full` means one item across the whole width. Two of them can only stack,
+    and stacked full-width blocks are two sections -- so a two-item `full` is a
+    document saying something the form cannot mean."""
+    editorial = base_editorial(
+        sections=[full({"type": "app", "appRef": "demo-app"}, {"type": "app", "appRef": "other-app"})]
+    )
+    registry = base_registry(app("demo-app"), app("other-app"))
+    assert errors_for(tmp_path, registry, editorial) != []
+
+
+def test_rejects_a_section_with_no_items(tmp_path):
+    """An empty block occupies page height and says nothing. Every form requires
+    at least one item, so this is caught by the form rather than by the client
+    quietly rendering a gap."""
+    for form in ("full", "row", "carousel"):
+        editorial = base_editorial(sections=[{"form": form, "items": []}])
+        assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != [], form
+
+
+def test_rejects_a_row_of_one(tmp_path):
+    """A row of one renders as a half-width card against empty space. The curator
+    who wants a single item featured means `full`, which is a statement that it
+    deserves the width -- the two are not interchangeable."""
+    editorial = base_editorial(sections=[row({"type": "app", "appRef": "demo-app"})])
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_rejects_an_unknown_form(tmp_path):
+    """The publish gate is closed on forms even though the CLIENT skips them.
+
+    Tolerance at the reader is what lets a new form ship before every client can
+    draw it; tolerance at the GATE would let a typo publish as an invisible
+    block, which reads to the curator as the store losing their work.
+    """
+    editorial = base_editorial(
+        sections=[{"form": "grid", "items": [{"type": "app", "appRef": "demo-app"}]}]
+    )
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_rejects_a_section_carrying_artwork_at_its_own_level(tmp_path):
+    """Artwork belongs to an item, not to the block that arranges items.
+
+    A section is closed (`additionalProperties: false`), so artwork written one
+    level too high is refused instead of silently ignored -- otherwise the
+    curator's image would validate, publish, and never render.
+    """
+    editorial = base_editorial(
+        sections=[
+            {
+                "form": "full",
+                "items": [{"type": "app", "appRef": "demo-app"}],
+                "artwork": {"ref": "art/hero.png"},
+            }
+        ]
+    )
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_accepts_the_one_plus_two_layout(tmp_path):
+    """The layout this shape exists to express: one full-width block, then a row
+    of two. Two sections, not three cards -- the grouping is in the document
+    rather than inferred from array position by the client."""
+    registry = base_registry(app("demo-app"), app("other-app"), app("third-app"))
+    editorial = base_editorial(
+        sections=[
+            full({"type": "app", "appRef": "demo-app"}),
+            row(
+                {"type": "collection", "title": "Pair one", "appRefs": ["other-app", "third-app"]},
+                {"type": "collection", "title": "Pair two", "appRefs": ["demo-app", "other-app"]},
+            ),
+        ]
+    )
+    assert errors_for(tmp_path, registry, editorial) == []
+
+
 def test_rejects_collection_of_one(tmp_path):
     """A one-app collection is an `app` placement wearing a costume. Allowing it
     would give two spellings for the same card and no reason to prefer either."""
@@ -283,7 +369,7 @@ def test_rejects_app_section_carrying_a_title(tmp_path):
     different words is describing a collection, so `title` here is refused
     instead of being silently ignored by the renderer."""
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app", "title": "Our pick"}]
+        sections=[full({"type": "app", "appRef": "demo-app", "title": "Our pick"})]
     )
     assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
 
@@ -295,7 +381,7 @@ def test_rejects_app_section_with_no_ref_at_all(tmp_path):
     `additionalProperties` whether or not `appRef` were required, so it could not
     tell the two constraints apart.
     """
-    editorial = base_editorial(sections=[{"type": "app"}])
+    editorial = base_editorial(sections=[full({"type": "app"})])
     assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
 
 
@@ -319,7 +405,7 @@ def test_rejects_collection_larger_than_the_card_can_draw(tmp_path):
     that validated and published."""
     names = [f"app-{i}" for i in range(7)]
     editorial = base_editorial(
-        sections=[{"type": "collection", "title": "Too many", "appRefs": names}]
+        sections=[full({"type": "collection", "title": "Too many", "appRefs": names})]
     )
     assert errors_for(tmp_path, base_registry(*(app(n) for n in names)), editorial) != []
 
@@ -332,7 +418,7 @@ def test_rejects_retired_section_types(tmp_path):
         {"type": "rail", "title": "Staff picks", "appRefs": ["demo-app"]},
         {"type": "banner", "md": "New this week"},
     ):
-        editorial = base_editorial(sections=[retired])
+        editorial = base_editorial(sections=[full(retired)])
         assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != [], retired
 
 
@@ -342,12 +428,14 @@ def test_accepts_a_collection_of_two(tmp_path):
     registry = base_registry(app("demo-app"), app("other-app"))
     editorial = base_editorial(
         sections=[
-            {
-                "type": "collection",
-                "title": "Ship it before lunch",
-                "appRefs": ["demo-app", "other-app"],
-                "blurb": "Two tools, one afternoon.",
-            }
+            full(
+                {
+                    "type": "collection",
+                    "title": "Ship it before lunch",
+                    "appRefs": ["demo-app", "other-app"],
+                    "blurb": "Two tools, one afternoon.",
+                }
+            )
         ]
     )
     assert errors_for(tmp_path, registry, editorial) == []
@@ -446,7 +534,7 @@ def test_rejects_reference_to_tombstoned_app(tmp_path):
         removed=[{"name": "demo-app", "reason": "withdrawn", "since": "2026-01-01"}],
     )
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[full({"type": "app", "appRef": "demo-app"})]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -469,7 +557,7 @@ def test_reinstated_app_may_be_referenced_again(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-06-01"}],
     )
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[full({"type": "app", "appRef": "demo-app"})]
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
@@ -482,7 +570,7 @@ def test_removal_newer_than_reinstatement_still_tombstoned(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-06-01"}],
     )
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[full({"type": "app", "appRef": "demo-app"})]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -499,7 +587,7 @@ def test_same_day_reinstatement_fails_closed(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-07-01"}],
     )
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[full({"type": "app", "appRef": "demo-app"})]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -514,7 +602,7 @@ def test_rejects_a_section_carrying_an_arbitrary_url(tmp_path):
     URL-scheme coverage the schema no longer contains.
     """
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app", "cta": {"href": "https://ok.example"}}]
+        sections=[full({"type": "app", "appRef": "demo-app", "cta": {"href": "https://ok.example"}})]
     )
     assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
 
@@ -601,7 +689,7 @@ def test_bogus_reinstatement_date_is_rejected(tmp_path):
         reinstated=[{"name": "demo-app", "since": "9999-99-99"}],
     )
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[full({"type": "app", "appRef": "demo-app"})]
     )
     assert errors_for(tmp_path, registry, editorial) != []
 
@@ -622,7 +710,7 @@ def test_cross_document_layer_fails_closed_on_a_bogus_date():
         reinstated=[{"name": "demo-app", "since": "9999-99-99"}],
     )
     editorial = base_editorial(
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[full({"type": "app", "appRef": "demo-app"})]
     )
     findings = Findings()
     check_cross_document(registry, editorial, base_order(), findings)

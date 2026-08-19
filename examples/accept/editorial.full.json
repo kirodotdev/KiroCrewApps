@@ -5,26 +5,45 @@
   "revision": "2026-07-30T19:20:00Z-a91f3c2",
   "sections": [
     {
-      "type": "app",
-      "appRef": "oncall-radar",
-      "blurb": "Every page, shift and handoff on one screen.",
-      "artwork": {
-        "ref": "art/spotlight-oncall.png",
-        "refDark": "art/spotlight-oncall-dark.png",
-        "alt": "An on-call dashboard with one active page and a quiet timeline."
-      }
+      "form": "full",
+      "items": [
+        {
+          "type": "app",
+          "appRef": "oncall-radar",
+          "blurb": "Every page, shift and handoff on one screen.",
+          "artwork": {
+            "ref": "art/spotlight-oncall.png",
+            "refDark": "art/spotlight-oncall-dark.png",
+            "alt": "An on-call dashboard with one active page and a quiet timeline."
+          }
+        }
+      ]
     },
     {
-      "type": "collection",
-      "title": "Ship a deck before lunch",
-      "appRefs": [
-        "pptx-maker",
-        "oncall-radar"
-      ],
-      "blurb": "A theme is what makes two unrelated apps belong on one card.",
-      "artwork": {
-        "ref": "art/spotlight-collection.webp"
-      }
+      "form": "row",
+      "items": [
+        {
+          "type": "collection",
+          "title": "Ship a deck before lunch",
+          "appRefs": [
+            "pptx-maker",
+            "oncall-radar"
+          ],
+          "blurb": "A theme is what makes two unrelated apps belong on one card.",
+          "artwork": {
+            "ref": "art/spotlight-collection.webp"
+          }
+        },
+        {
+          "type": "collection",
+          "title": "Keep the team in step",
+          "appRefs": [
+            "standup-zen",
+            "mindcraft"
+          ],
+          "blurb": "Two cards side by side on a desktop, one and a half on a phone -- the document says neither."
+        }
+      ]
     }
   ]
 }

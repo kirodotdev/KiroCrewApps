@@ -242,10 +242,19 @@ def check_cross_document(
     for idx, section in enumerate(editorial.get("sections") or []):
         if not isinstance(section, dict):
             continue
-        where = f"editorial: section[{idx}] ({section.get('type')})"
-        if isinstance(section.get("appRef"), str):
-            check_refs([section["appRef"]], where)
-        check_refs(section.get("appRefs") or [], where)
+        # References live one level down now: a section arranges items, and each
+        # item is what names apps. Walking `sections[]` alone would silently
+        # check nothing and report a clean document.
+        for jdx, item in enumerate(section.get("items") or []):
+            if not isinstance(item, dict):
+                continue
+            where = (
+                f"editorial: section[{idx}] ({section.get('form')})"
+                f" item[{jdx}] ({item.get('type')})"
+            )
+            if isinstance(item.get("appRef"), str):
+                check_refs([item["appRef"]], where)
+            check_refs(item.get("appRefs") or [], where)
 
     # Not fatal: a declared app in no category is legitimate and lands in the
     # default bucket rather than disappearing. Worth saying out loud, because
