@@ -1584,3 +1584,60 @@ def test_assets_are_uploaded_before_the_document_that_names_them():
             f"the icons (asset upload at line {asset_line + 1}, document sync at "
             f"line {document_line + 1})"
         )
+
+
+class TestAuthoredCannotForgeGeneratedFields:
+    """An authored document may not supply `generatedAt` or `revision`.
+
+    Both builders finish with `**doc`, so a generated field that survived the
+    authored read would land AFTER the stamped one and win -- riding into a
+    signed document as the publisher's own claim about when it was built and
+    which revision it is. The digest deliberately excludes these fields, which
+    is the evidence they were always meant to be stamped.
+
+    One schema validates both the authored and the published form, so it cannot
+    forbid them; it has to admit them for the published side. That leaves the
+    builder as the only place the authored side can be held, and these tests as
+    the only thing that pins it.
+
+    The registry builder is absent here on purpose: it enumerates its keys
+    rather than spreading authored input, so the shape is unreachable there.
+    """
+
+    FORGED = {"generatedAt": "1999-01-01T00:00:00Z", "revision": "1999-forged"}
+
+    def test_editorial_stamps_over_authored_values(self):
+        now = datetime(2026, 8, 19, 6, 0, 0, tzinfo=timezone.utc)
+        doc = publish.build_editorial(
+            {"schemaVersion": 1, "sections": [], **self.FORGED}, now
+        )
+        assert doc["generatedAt"] == "2026-08-19T06:00:00Z"
+        assert doc["revision"].startswith("2026-08-19T06:00:00Z-")
+        assert "forged" not in doc["revision"]
+
+    def test_category_order_stamps_over_authored_values(self):
+        now = datetime(2026, 8, 19, 6, 0, 0, tzinfo=timezone.utc)
+        doc = publish.build_category_order(
+            {"schemaVersion": 1, "categories": ["dev"], **self.FORGED}, now
+        )
+        assert doc["generatedAt"] == "2026-08-19T06:00:00Z"
+        assert doc["revision"].startswith("2026-08-19T06:00:00Z-")
+        assert "forged" not in doc["revision"]
+
+    def test_a_forged_timestamp_does_not_change_the_revision(self):
+        """The digest covers content, so two documents differing only in a forged
+        timestamp must publish to the SAME revision.
+
+        Pins the half a naive fix misses: stripping the field from the spread
+        while leaving it in the digest input would make the revision depend on a
+        value the curator controls, so an unchanged catalog would republish under
+        a new revision on every edit to that field.
+        """
+        now = datetime(2026, 8, 19, 6, 0, 0, tzinfo=timezone.utc)
+        clean = publish.build_category_order(
+            {"schemaVersion": 1, "categories": ["dev"]}, now
+        )
+        forged = publish.build_category_order(
+            {"schemaVersion": 1, "categories": ["dev"], **self.FORGED}, now
+        )
+        assert clean["revision"] == forged["revision"]

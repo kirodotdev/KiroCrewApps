@@ -169,5 +169,9 @@ custom-rules:
         any first-party app; do not expect a manifest to supply it.
       - Keep the file normalized (`tools/format.py`), so a review diff shows the
         semantic change rather than a reflow.
-      - An entry must not name a category that `editorial.json` does not
-        declare; that is checked cross-document at validation.
+      - An entry must not name a category that `category-order.json` does not
+        list; that is checked cross-document at validation. The rail order is a
+        document of its own because it and the featured layout never reference
+        each other, and because sharing a file would mean sharing a version
+        gate -- a bump made for a featuring layout would otherwise re-sort every
+        category on an older client.

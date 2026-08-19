@@ -1009,6 +1009,21 @@ def bake_editorial_artwork(
     return {**doc, "sections": baked}
 
 
+#: Fields the publish step stamps, which an authored document therefore may not
+#: supply. Stripped when the authored input is read rather than fought at the
+#: spread: the two builders below finish with `**doc`, so a `generatedAt` that
+#: survived into `doc` would override the stamped one and ride into a SIGNED
+#: document -- and the digest deliberately excludes these fields, which is the
+#: evidence they were always meant to be stamped rather than authored. The
+#: registry builder is immune by construction: it enumerates its keys instead of
+#: spreading authored input, which is why this only ever applied to these two.
+#:
+#: One schema validates both the authored and the published form of a document,
+#: so the schema cannot forbid them -- it has to admit them for the published
+#: side. That makes this the only place the authored side can be held.
+GENERATED_FIELDS = ("generatedAt", "revision")
+
+
 def build_editorial(
     authored: dict[str, Any],
     now: datetime,
@@ -1016,14 +1031,17 @@ def build_editorial(
     findings: Findings | None = None,
 ) -> dict[str, Any]:
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    doc = {k: v for k, v in authored.items() if k != "schemaVersion"}
+    doc = {
+        k: v
+        for k, v in authored.items()
+        if k != "schemaVersion" and k not in GENERATED_FIELDS
+    }
     if assets is not None and findings is not None:
         doc = bake_editorial_artwork(doc, assets, findings)
-    content_only = {k: v for k, v in doc.items() if k not in ("generatedAt", "revision")}
     return {
         "schemaVersion": 1,
         "generatedAt": stamped,
-        "revision": f"{stamped}-{content_digest(content_only)[:7]}",
+        "revision": f"{stamped}-{content_digest(doc)[:7]}",
         **doc,
     }
 
@@ -1037,12 +1055,15 @@ def build_category_order(authored: dict[str, Any], now: datetime) -> dict[str, A
     is also why it takes no `Findings`, having no field it could degrade.
     """
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
-    doc = {k: v for k, v in authored.items() if k != "schemaVersion"}
-    content_only = {k: v for k, v in doc.items() if k not in ("generatedAt", "revision")}
+    doc = {
+        k: v
+        for k, v in authored.items()
+        if k != "schemaVersion" and k not in GENERATED_FIELDS
+    }
     return {
         "schemaVersion": 1,
         "generatedAt": stamped,
-        "revision": f"{stamped}-{content_digest(content_only)[:7]}",
+        "revision": f"{stamped}-{content_digest(doc)[:7]}",
         **doc,
     }
 
