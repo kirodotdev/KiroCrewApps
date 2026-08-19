@@ -48,6 +48,17 @@ def base_editorial(**extra) -> dict:
     return {"schemaVersion": 1, **extra}
 
 
+def app_section(ref: str = "demo-app", **extra) -> dict:
+    """A schema-valid `app` section.
+
+    `artwork` is required on this variant, so a test about some OTHER rule has to
+    carry one or it fails on the wrong thing. Kept as a helper rather than a
+    literal per call site: when the variant's required set changes again, the
+    tests that merely need a valid section should not each need editing.
+    """
+    return {"type": "app", "appRef": ref, "artwork": {"ref": "art/pick.png"}, **extra}
+
+
 def errors_for(tmp_path: Path, registry: dict, editorial: dict) -> list[str]:
     reg, ed = write_pair(tmp_path, registry, editorial)
     return validate(reg, ed).errors
@@ -72,7 +83,7 @@ def test_accepts_app_with_category_membership(tmp_path):
     registry = base_registry(app("demo-app"))
     editorial = base_editorial(
         categories=[{"id": "developer-tools", "label": "Developer Tools", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[app_section()]
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
@@ -82,7 +93,7 @@ def test_accepts_same_app_in_category_and_section(tmp_path):
     registry = base_registry(app("demo-app", categories=["productivity"]))
     editorial = base_editorial(
         categories=[{"id": "productivity", "label": "Productivity", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}],
+        sections=[app_section()],
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
@@ -175,7 +186,7 @@ def test_rejects_duplicate_app_name(tmp_path):
 def test_rejects_dangling_app_ref(tmp_path):
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "app", "appRef": "ghost-app"}]
+        sections=[app_section("ghost-app")]
     )
     assert any("not declared" in e for e in errors_for(tmp_path, base_registry(), editorial))
 
@@ -268,6 +279,37 @@ def test_rejects_app_section_carrying_a_title(tmp_path):
         sections=[{"type": "app", "appRef": "demo-app", "title": "Our pick"}]
     )
     assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_rejects_app_section_without_artwork(tmp_path):
+    """`artwork` is required on the `app` variant, and this is the payload that
+    proves it -- otherwise the requirement is a description nothing enforces.
+
+    Refused rather than degraded because the client draws editorial art or
+    nothing: it does not fall back to the app's own hero image, since that art
+    argues for one app and borrowing it would illustrate a curator's placement
+    with the author's claim. A section that omitted artwork would therefore
+    render text-only in the loudest slot on the page, which serves the app worse
+    than not featuring it -- so the omission is refused at publish time, where a
+    curator can still fix it, instead of shipping.
+    """
+    editorial = base_editorial(sections=[{"type": "app", "appRef": "demo-app"}])
+    assert errors_for(tmp_path, base_registry(app("demo-app")), editorial) != []
+
+
+def test_collection_without_artwork_is_still_accepted(tmp_path):
+    """The requirement above is scoped to `app`, and this pins that scope.
+
+    A collection has something to show without a picture -- two to six named apps
+    under a stated theme -- and borrowing any one member's art would silently
+    promote that member above the others. Requiring artwork here too would block
+    the one placement that reads fine without it.
+    """
+    editorial = base_editorial(
+        sections=[{"type": "collection", "title": "Picks", "appRefs": ["demo-app", "other-app"]}]
+    )
+    registry = base_registry(app("demo-app"), app("other-app"))
+    assert errors_for(tmp_path, registry, editorial) == []
 
 
 def test_rejects_app_section_with_no_ref_at_all(tmp_path):
@@ -413,7 +455,7 @@ def test_rejects_reference_to_tombstoned_app(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[app_section()]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -437,7 +479,7 @@ def test_reinstated_app_may_be_referenced_again(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[app_section()]
     )
     assert errors_for(tmp_path, registry, editorial) == []
 
@@ -451,7 +493,7 @@ def test_removal_newer_than_reinstatement_still_tombstoned(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[app_section()]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -469,7 +511,7 @@ def test_same_day_reinstatement_fails_closed(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[app_section()]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
 
@@ -572,7 +614,7 @@ def test_bogus_reinstatement_date_is_rejected(tmp_path):
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[app_section()]
     )
     assert errors_for(tmp_path, registry, editorial) != []
 
@@ -594,7 +636,7 @@ def test_cross_document_layer_fails_closed_on_a_bogus_date():
     )
     editorial = base_editorial(
         categories=[{"id": "dev", "label": "Dev", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
+        sections=[app_section()]
     )
     findings = Findings()
     check_cross_document(registry, editorial, findings)

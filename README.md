@@ -114,6 +114,32 @@ then render wrong in the store:
   that clears a persisted tombstone, so one with a typo'd name would otherwise
   be a silent no-op.
 
+## Two section types, and the one place they differ on artwork
+
+Discover's layout is a list of sections, each either an `app` (one app, headed by
+its own name) or a `collection` (two to six apps under a curator's `title`).
+
+`artwork` is **required on an `app` section and optional on a `collection`**. The
+asymmetry is not an oversight:
+
+- The client draws **editorial art or nothing**. It deliberately does not fall
+  back to the app's own hero image — that art argues for one app, and borrowing
+  it would illustrate a curator's placement with the author's claim. On a
+  collection it would be worse still, since the art would come from whichever
+  member happens to be first and would silently promote it.
+- So an `app` section with no artwork renders as a **text-only card in the
+  loudest slot on the page**, which serves the app worse than not featuring it at
+  all. Requiring the picture keeps that state unreachable by omission rather than
+  merely discouraged.
+- A collection reads fine without one: it already shows several named apps under
+  a stated theme.
+
+Artwork is raster only (`png` / `webp` / `jpg`), authored 16:9 at 1600x900 and
+capped at 1MB — same whitelist as icons, because an SVG served from our own
+origin is an executing document on our domain. Commit the file under
+`catalog/assets/editorial/` and reference it as a repo-relative path; the publish
+step replaces that path with a content-addressed hosted one.
+
 ## Removing an app
 
 Omitting an entry is **not** a removal: a client with a warm cache keeps serving

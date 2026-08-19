@@ -108,10 +108,10 @@
 
     "sectionApp": {
       "title": "app -- featured placement for ONE app",
-      "description": "The app's own name is the heading, so there is no `title`: a curator who wants to say something other than the app's name is describing a collection of one, and a collection is the variant that carries a theme.\n\nSeparate from `collection` because the two differ in what they REQUIRE, not merely in how many apps they hold: a collection is meaningless without a theme, and this variant is meaningless with one. Expressing both as a single variant with a variable-length list forces `title` to be optional everywhere and pushes 'required when more than one' into code the schema cannot see.",
+      "description": "The app's own name is the heading, so there is no `title`: a curator who wants to say something other than the app's name is describing a collection of one, and a collection is the variant that carries a theme.\n\nSeparate from `collection` because the two differ in what they REQUIRE, not merely in how many apps they hold: a collection is meaningless without a theme, and this variant is meaningless with one. Expressing both as a single variant with a variable-length list forces `title` to be optional everywhere and pushes 'required when more than one' into code the schema cannot see.\n\n`artwork` is REQUIRED here and optional on a collection, and the asymmetry is the point. This is the store's most persuasive slot -- one app, a full card, nothing competing -- and the picture is most of what makes it persuasive. The client draws editorial art or nothing: it deliberately does NOT fall back to the app's own hero image, because that art argues for one app and borrowing it would illustrate a curator's placement with the author's claim. So an `app` section with no artwork renders as a text-only card in the loudest position on the page, which serves the app worse than not featuring it. Requiring the picture is what keeps that state unreachable by omission rather than merely discouraged.\n\nA collection stays optional because it has something to show without a picture -- two to six named apps under a stated theme -- and because borrowing any one member's art would silently promote that member above the others.",
       "type": "object",
       "additionalProperties": false,
-      "required": ["type", "appRef"],
+      "required": ["type", "appRef", "artwork"],
       "properties": {
         "type": { "const": "app" },
         "appRef": { "$ref": "#/$defs/appRef" },
