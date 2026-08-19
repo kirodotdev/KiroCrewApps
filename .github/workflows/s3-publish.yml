@@ -183,6 +183,8 @@ jobs:
             echo
             echo '```'
             echo "https://apps.crew.kiro.dev/official-registry.json"
+            echo "https://apps.crew.kiro.dev/editorial.json"
+            echo "https://apps.crew.kiro.dev/category-order.json"
             echo "https://apps.crew.kiro.dev/revisions/${REV}/official-registry.json"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"

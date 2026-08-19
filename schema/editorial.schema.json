@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.crew.kiro.dev/appstore/editorial-v1.schema.json",
   "title": "KiroCrew App Store editorial feed",
-  "description": "Everything about how the store PRESENTS apps: the category taxonomy, which apps are in which category, and the Discover layout. Only REFERENCES apps by name -- app data always resolves through the registry, so editorial can never inject a phantom or spoofed app. Read tolerantly: unknown section types are skipped, and a section that fails validation is dropped individually rather than failing the page.",
+  "description": "How the store FEATURES apps: the Discover page's editorial layout. The category rail's order is a document of its own (`category-order.json`) because the two never reference each other -- a section names apps, never a category -- and because sharing a file would mean sharing a version gate, so a bump made here would re-sort every category on an older client. Only REFERENCES apps by name -- app data always resolves through the registry, so editorial can never inject a phantom or spoofed app. Read tolerantly: unknown section types are skipped, and a section that fails validation is dropped individually rather than failing the page.",
 
   "type": "object",
   "additionalProperties": false,
@@ -10,7 +10,7 @@
 
   "properties": {
     "schemaVersion": {
-      "description": "Integer major. Additive-only within a major: new fields are optional and existing fields never change meaning. A major the client does not support triggers FULL fallback (cache -> bundled snapshot -> built-in heuristic), not a partial render.\n\nONE CARVE-OUT, and it is narrow: a `sections` VARIANT that has never appeared in a published document may be removed, or have its bounds tightened, without a major bump. Compatibility is a promise to consumers, and a variant no client can ever have read has none -- the CDN's own history is the evidence. It does not extend to a variant that shipped even once, nor to any field of `categories`, which has been published since the first revision.",
+      "description": "Integer major. Additive-only within a major: new fields are optional and existing fields never change meaning. A major the client does not support triggers FULL fallback (cache -> bundled snapshot -> built-in heuristic), not a partial render.\n\nONE CARVE-OUT, and it is narrow: a `sections` VARIANT that has never appeared in a published document may be removed, or have its bounds tightened, without a major bump. Compatibility is a promise to consumers, and a variant no client can ever have read has none -- the CDN's own history is the evidence. It does not extend to a variant that shipped even once.",
       "type": "integer",
       "const": 1
     },
@@ -21,13 +21,6 @@
     },
     "generatedAt": { "type": "string", "format": "date-time" },
     "revision": { "type": "string", "minLength": 1 },
-
-    "categories": {
-      "description": "The category taxonomy: ids, display labels and rail order. MEMBERSHIP is not here -- it is stated on the registry entry, so an app and its placement are one edit and a reference to an app that does not exist is unrepresentable. `order` drives the rail sequence; there is no separate ordering section. An app in no category falls into a default bucket and is never hidden; membership is single-valued by construction (an app appearing in two categories is a curation error the publish step rejects), because a partitioned rail is the whole point -- an app that belongs in more than one place is served by a `collection` section or by search keywords, neither of which touches the taxonomy.\n\nThis list is the ONLY place the category vocabulary is defined: the authored registry validates an app's category against this document rather than repeating the set in an enum, so adding a category is one edit here.",
-      "type": "array",
-      "items": { "$ref": "#/$defs/category" },
-      "maxItems": 30
-    },
 
     "sections": {
       "description": "Ordered Discover layout. Data-driven, not a fixed template -- new layouts are new `type` values, which is what lets the store's appearance change without a client release.",
@@ -43,29 +36,6 @@
       "type": "string",
       "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
       "maxLength": 64
-    },
-
-    "category": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["id", "label", "order"],
-      "properties": {
-        "id": {
-          "type": "string",
-          "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
-          "maxLength": 40
-        },
-        "label": {
-          "description": "Display string. Relabeling is a catalog edit, not a client release -- which is why nothing references a category by label.",
-          "type": "string",
-          "minLength": 1,
-          "maxLength": 40
-        },
-        "order": {
-          "description": "Required, because an absent order has no defined placement: uniqueness can only be checked among the values that are present, so a category without one would land wherever array position happened to put it.",
-          "type": "integer"
-        }
-      }
     },
 
     "artwork": {

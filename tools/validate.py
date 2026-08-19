@@ -15,10 +15,16 @@ input against the wire contract would reject perfectly good input and, worse,
 would accept hand-written presentation fields.
 
 *Cross-document* -- the invariants no single schema can express, because they
-span the two files or compare elements to each other. These are the ones worth
+span the three files or compare elements to each other. These are the ones worth
 having: a dangling ``appRefs`` entry or an app silently landing in two
 categories is exactly the sort of thing that validates fine per-document and
 then renders wrong in the store.
+
+The three documents are not peers in this graph. Both leaves point at the
+registry: an app entry names a category id, and a section names an app. The rail
+order and the featured layout never reference each other, which is why they are
+separate documents -- and why this is the only place their two reference chains
+are checked together.
 
 Exit code is 0 only when the catalog is publishable.
 """
@@ -136,9 +142,10 @@ def latest_by_name(
 def check_cross_document(
     registry: dict[str, Any],
     editorial: dict[str, Any],
+    category_order: dict[str, Any],
     findings: Findings,
 ) -> None:
-    """Enforce the invariants that span the two documents."""
+    """Enforce the invariants that span the three documents."""
     apps = registry.get("apps") or []
     names = [a.get("name") for a in apps if isinstance(a, dict)]
 
@@ -180,28 +187,20 @@ def check_cross_document(
         )
     }
 
-    categories = editorial.get("categories") or []
+    # Rail order is array position, so there is no rank to check for
+    # uniqueness and no tie-break to document -- both invariants the numeric
+    # `order` field used to need. `uniqueItems` in the schema covers a repeated
+    # id, which leaves EXISTENCE as the only cross-document question here.
+    declared_categories = [
+        cid for cid in (category_order.get("categories") or []) if isinstance(cid, str)
+    ]
 
-    # `order` drives the rail sequence. Duplicate orders make the sequence
-    # depend on array position, which is invisible to whoever is editing.
-    orders = [c.get("order") for c in categories if isinstance(c.get("order"), int)]
-    for order, count in Counter(orders).items():
-        if count > 1:
-            findings.error(
-                f"editorial: category order {order} used by {count} categories; "
-                f"orders must be unique so the rail sequence is deterministic"
-            )
-
-    ids = [c.get("id") for c in categories if isinstance(c, dict)]
-    for cid, count in Counter(ids).items():
-        if count > 1:
-            findings.error(f"editorial: category id {cid!r} declared {count} times")
-
-    # Membership is stated on each app, so the taxonomy has exactly one home:
-    # the ids declared here. A schema cannot reference another document, so the
-    # id PATTERN is checked there and EXISTENCE is checked here -- duplicating
-    # the list into a schema enum would be a second source of truth that drifts.
-    known = {c.get("id") for c in categories if isinstance(c, dict)}
+    # Membership is stated on each app, so the vocabulary has exactly one home:
+    # the ids listed in the order document. A schema cannot reference another
+    # document, so the id PATTERN is checked there and EXISTENCE is checked here
+    # -- duplicating the list into a schema enum would be a second source of
+    # truth that drifts.
+    known = set(declared_categories)
     used: set[str] = set()
     for entry in registry.get("apps") or []:
         if not isinstance(entry, dict):
@@ -212,7 +211,7 @@ def check_cross_document(
             if cid not in known:
                 findings.error(
                     f"app {name!r}: category {cid!r} is not declared in "
-                    f"editorial.json (known: {', '.join(sorted(known)) or 'none'})"
+                    f"category-order.json (known: {', '.join(sorted(known)) or 'none'})"
                 )
             else:
                 used.add(cid)
@@ -270,24 +269,38 @@ def check_cross_document(
         )
 
 
-def validate(registry_path: Path, editorial_path: Path) -> Findings:
+def validate(
+    registry_path: Path, editorial_path: Path, category_order_path: Path
+) -> Findings:
     findings = Findings()
 
     registry = load_json(registry_path, findings)
     editorial = load_json(editorial_path, findings)
-    if registry is None or editorial is None:
+    category_order = load_json(category_order_path, findings)
+    if registry is None or editorial is None or category_order is None:
         return findings
 
     check_schema(
         registry, SCHEMA_DIR / "authored-registry.schema.json", "registry", findings
     )
     check_schema(editorial, SCHEMA_DIR / "editorial.schema.json", "editorial", findings)
+    check_schema(
+        category_order,
+        SCHEMA_DIR / "category-order.schema.json",
+        "category-order",
+        findings,
+    )
 
-    # Cross-document checks assume both documents are the right SHAPE. Running
+    # Cross-document checks assume every document is the right SHAPE. Running
     # them on input that failed its schema produces cascading noise about
     # fields that were never valid to begin with.
-    if findings.ok and isinstance(registry, dict) and isinstance(editorial, dict):
-        check_cross_document(registry, editorial, findings)
+    if (
+        findings.ok
+        and isinstance(registry, dict)
+        and isinstance(editorial, dict)
+        and isinstance(category_order, dict)
+    ):
+        check_cross_document(registry, editorial, category_order, findings)
 
     return findings
 
@@ -295,8 +308,11 @@ def validate(registry_path: Path, editorial_path: Path) -> Findings:
 def main(argv: list[str]) -> int:
     registry_path = Path(argv[1]) if len(argv) > 1 else CATALOG_DIR / "official-registry.json"
     editorial_path = Path(argv[2]) if len(argv) > 2 else CATALOG_DIR / "editorial.json"
+    order_path = (
+        Path(argv[3]) if len(argv) > 3 else CATALOG_DIR / "category-order.json"
+    )
 
-    findings = validate(registry_path, editorial_path)
+    findings = validate(registry_path, editorial_path, order_path)
 
     for warning in findings.warnings:
         print(f"warning: {warning}")
