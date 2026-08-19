@@ -3,28 +3,6 @@
   "minClientVersion": "0.1.2",
   "generatedAt": "2026-07-30T19:20:00Z",
   "revision": "2026-07-30T19:20:00Z-a91f3c2",
-  "categories": [
-    {
-      "id": "ops",
-      "label": "Ops",
-      "order": 10
-    },
-    {
-      "id": "productivity",
-      "label": "Productivity",
-      "order": 20
-    },
-    {
-      "id": "writing",
-      "label": "Writing",
-      "order": 30
-    },
-    {
-      "id": "fun",
-      "label": "Fun",
-      "order": 40
-    }
-  ],
   "sections": [
     {
       "type": "app",

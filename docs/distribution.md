@@ -7,6 +7,7 @@ How the signed catalog gets from this repository to a URL clients can fetch.
 ```
 https://apps.crew.kiro.dev/official-registry.json
 https://apps.crew.kiro.dev/editorial.json
+https://apps.crew.kiro.dev/category-order.json
 ```
 
 Current state: **not yet reachable.** The pipeline produces signed artifacts and
@@ -71,6 +72,8 @@ A dedicated hostname means no prefix; keys sit at the root.
 /official-registry.json.sig
 /editorial.json
 /editorial.json.sig
+/category-order.json                    <- rail sequence, its own version gate
+/category-order.json.sig
 /keys/*.pub                             <- verification keys
 /revisions/<revision>/…                 <- immutable copies, cached hard
 /assets/icons/<sha256>.<ext>            <- hosted third-party app icons

@@ -25,12 +25,33 @@ from validate import validate  # noqa: E402
 SCHEMA_DIR = ROOT / "schema"
 
 
-def write_pair(tmp_path: Path, registry: dict, editorial: dict) -> tuple[Path, Path]:
+def write_docs(
+    tmp_path: Path, registry: dict, editorial: dict, order: dict | None = None
+) -> tuple[Path, Path, Path]:
+    """Write the three authored documents and return their paths.
+
+    `order` defaults to a valid empty rail so a test about the registry or the
+    featured layout does not have to know this document exists. A test that IS
+    about the rail passes one.
+    """
     reg = tmp_path / "official-registry.json"
     ed = tmp_path / "editorial.json"
+    co = tmp_path / "category-order.json"
     reg.write_text(json.dumps(registry), encoding="utf-8")
     ed.write_text(json.dumps(editorial), encoding="utf-8")
-    return reg, ed
+    co.write_text(json.dumps(order if order is not None else base_order()), encoding="utf-8")
+    return reg, ed, co
+
+
+def base_order(*ids: str) -> dict:
+    """A rail-order document. Order is array position, so the args ARE the order.
+
+    The schema requires at least one id, so an "empty" rail is spelled with a
+    single placeholder rather than `[]` -- a rail with no categories at all is
+    not a state the store can be in, since every app either names a category or
+    falls into the default bucket.
+    """
+    return {"schemaVersion": 1, "categories": list(ids) or ["other"]}
 
 
 def app(name: str = "demo-app", ref: str = "main", categories=None) -> dict:
@@ -48,9 +69,11 @@ def base_editorial(**extra) -> dict:
     return {"schemaVersion": 1, **extra}
 
 
-def errors_for(tmp_path: Path, registry: dict, editorial: dict) -> list[str]:
-    reg, ed = write_pair(tmp_path, registry, editorial)
-    return validate(reg, ed).errors
+def errors_for(
+    tmp_path: Path, registry: dict, editorial: dict, order: dict | None = None
+) -> list[str]:
+    reg, ed, co = write_docs(tmp_path, registry, editorial, order)
+    return validate(reg, ed, co).errors
 
 
 # --------------------------------------------------------------------------
@@ -60,7 +83,7 @@ def errors_for(tmp_path: Path, registry: dict, editorial: dict) -> list[str]:
 
 def test_accepts_empty_catalog(tmp_path):
     """The catalog starts empty. An empty registry is publishable, not an error."""
-    assert errors_for(tmp_path, base_registry(), base_editorial(categories=[])) == []
+    assert errors_for(tmp_path, base_registry(), base_editorial()) == []
 
 
 def test_accepts_branch_ref_in_authored_input(tmp_path):
@@ -70,27 +93,23 @@ def test_accepts_branch_ref_in_authored_input(tmp_path):
 
 def test_accepts_app_with_category_membership(tmp_path):
     registry = base_registry(app("demo-app"))
-    editorial = base_editorial(
-        categories=[{"id": "developer-tools", "label": "Developer Tools", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}]
-    )
-    assert errors_for(tmp_path, registry, editorial) == []
+    editorial = base_editorial(sections=[{"type": "app", "appRef": "demo-app"}])
+    order = base_order("developer-tools")
+    assert errors_for(tmp_path, registry, editorial, order) == []
 
 
 def test_accepts_same_app_in_category_and_section(tmp_path):
     """A rail is how an app appears twice WITHOUT a second category."""
     registry = base_registry(app("demo-app", categories=["productivity"]))
-    editorial = base_editorial(
-        categories=[{"id": "productivity", "label": "Productivity", "order": 10}],
-        sections=[{"type": "app", "appRef": "demo-app"}],
-    )
-    assert errors_for(tmp_path, registry, editorial) == []
+    editorial = base_editorial(sections=[{"type": "app", "appRef": "demo-app"}])
+    order = base_order("productivity")
+    assert errors_for(tmp_path, registry, editorial, order) == []
 
 
 def test_uncategorized_app_warns_but_does_not_fail(tmp_path):
     """An app in no category lands in the default bucket; it is never hidden."""
-    reg, ed = write_pair(tmp_path, base_registry(app("demo-app")), base_editorial(categories=[]))
-    findings = validate(reg, ed)
+    reg, ed, co = write_docs(tmp_path, base_registry(app("demo-app")), base_editorial())
+    findings = validate(reg, ed, co)
     assert findings.ok
     assert any("default bucket" in w for w in findings.warnings)
 
@@ -174,7 +193,6 @@ def test_rejects_duplicate_app_name(tmp_path):
 
 def test_rejects_dangling_app_ref(tmp_path):
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[{"type": "app", "appRef": "ghost-app"}]
     )
     assert any("not declared" in e for e in errors_for(tmp_path, base_registry(), editorial))
@@ -340,14 +358,10 @@ def test_accepts_a_secondary_category_but_says_it_does_not_place_the_app(tmp_pat
     only widens search. Silently accepting it would leave a curator thinking the
     app appears in two rails."""
     registry = base_registry(app("demo-app", categories=["dev", "ops"]))
-    editorial = base_editorial(
-        categories=[
-            {"id": "dev", "label": "Dev", "order": 10},
-            {"id": "ops", "label": "Ops", "order": 20},
-        ]
+    reg, ed, co = write_docs(
+        tmp_path, registry, base_editorial(), base_order("dev", "ops")
     )
-    reg, ed = write_pair(tmp_path, registry, editorial)
-    findings = validate(reg, ed)
+    findings = validate(reg, ed, co)
     assert findings.errors == []
     assert any("primary category is 'dev'" in w for w in findings.warnings), findings.warnings
 
@@ -355,55 +369,75 @@ def test_accepts_a_secondary_category_but_says_it_does_not_place_the_app(tmp_pat
 def test_rejects_a_third_category(tmp_path):
     """Capped at two, or 'which rail does this land in' stops having an answer."""
     registry = base_registry(app("demo-app", categories=["dev", "ops", "other"]))
-    editorial = base_editorial(
-        categories=[
-            {"id": "dev", "label": "Dev", "order": 10},
-            {"id": "ops", "label": "Ops", "order": 20},
-            {"id": "other", "label": "Other", "order": 30},
-        ]
-    )
-    assert errors_for(tmp_path, registry, editorial) != []
+    order = base_order("dev", "ops", "other")
+    assert errors_for(tmp_path, registry, base_editorial(), order) != []
 
 
 def test_rejects_the_same_category_listed_twice(tmp_path):
     """"in categories 'a' and 'a'" reads as nonsense; uniqueItems refuses it."""
     registry = base_registry(app("demo-app", categories=["dev", "dev"]))
-    editorial = base_editorial(categories=[{"id": "dev", "label": "Dev", "order": 10}])
-    assert errors_for(tmp_path, registry, editorial) != []
+    assert errors_for(tmp_path, registry, base_editorial(), base_order("dev")) != []
 
 
-def test_rejects_a_category_not_declared_in_editorial(tmp_path):
-    """The taxonomy has one home. A schema cannot check another document, so an
+def test_rejects_a_category_not_declared_in_the_order_document(tmp_path):
+    """The vocabulary has one home. A schema cannot check another document, so an
     id that exists nowhere has to be caught here or it reaches a client."""
     registry = base_registry(app("demo-app", categories=["invented"]))
-    editorial = base_editorial(categories=[{"id": "dev", "label": "Dev", "order": 10}])
-    errors = errors_for(tmp_path, registry, editorial)
-    assert any("not declared in editorial.json" in e for e in errors), errors
+    errors = errors_for(tmp_path, registry, base_editorial(), base_order("dev"))
+    assert any("not declared in category-order.json" in e for e in errors), errors
 
 
-def test_rejects_duplicate_category_order(tmp_path):
-    editorial = base_editorial(
-        categories=[
-            {"id": "dev", "label": "Dev", "order": 10},
-            {"id": "ops", "label": "Ops", "order": 10},
-        ]
-    )
-    assert any("unique" in e for e in errors_for(tmp_path, base_registry(), editorial))
+def test_editorial_refuses_a_categories_key(tmp_path):
+    """The rail order moved out, and `additionalProperties: false` is what makes
+    that a refusal rather than a silent no-op.
 
-
-def test_rejects_duplicate_category_id(tmp_path):
-    """Two categories sharing an id make membership ambiguous.
-
-    Found by mutation testing: this check could be deleted with the suite
-    still green.
+    Without this, a curator editing the old shape would get a green gate and a
+    published document whose categories nothing reads -- the same failure mode as
+    the `label` field this split deleted, which validated and published for
+    months while the client used its own compiled copy.
     """
-    editorial = base_editorial(
-        categories=[
-            {"id": "dev", "label": "Dev", "order": 10},
-            {"id": "dev", "label": "Dev Tools", "order": 20},
-        ]
-    )
-    assert any("declared 2 times" in e for e in errors_for(tmp_path, base_registry(), editorial))
+    editorial = {
+        "schemaVersion": 1,
+        "categories": [{"id": "dev", "label": "Dev", "order": 10}],
+    }
+    assert errors_for(tmp_path, base_registry(), editorial) != []
+
+
+def test_the_three_documents_are_validated_independently(tmp_path):
+    """Each document is held to its own schema, so one bad file names itself.
+
+    The point of the split is that a bump to one contract does not reach the
+    others; a shared verdict would undo that at the gate even though the client
+    keeps them separate.
+    """
+    bad_order = {"schemaVersion": 1, "categories": ["Not A Valid Id"]}
+    errors = errors_for(tmp_path, base_registry(), base_editorial(), bad_order)
+    assert any(e.startswith("category-order:") for e in errors), errors
+    assert not any(e.startswith("editorial:") for e in errors), errors
+
+
+def test_rejects_the_same_category_declared_twice(tmp_path):
+    """Two entries sharing an id make membership ambiguous.
+
+    Found by mutation testing when this was a cross-document check over a list
+    of objects: it could be deleted with the suite still green. It is now
+    `uniqueItems` on a list of strings, so the schema refuses it -- kept as a
+    test because the reason to refuse it did not go away with the mechanism.
+    """
+    order = {"schemaVersion": 1, "categories": ["dev", "dev"]}
+    assert errors_for(tmp_path, base_registry(), base_editorial(), order) != []
+
+
+def test_rail_sequence_is_array_position(tmp_path):
+    """Two categories may not carry a rank, because there is no rank to carry.
+
+    The numeric `order` this replaced needed two invariants of its own -- ranks
+    unique, and a tie-break for equal ranks -- and bought nothing an array does
+    not already give. A document still carrying one is refused rather than
+    silently ignored, so a curator who writes the old shape is told.
+    """
+    order = {"schemaVersion": 1, "categories": [{"id": "dev", "order": 10}]}
+    assert errors_for(tmp_path, base_registry(), base_editorial(), order) != []
 
 
 def test_rejects_reference_to_tombstoned_app(tmp_path):
@@ -412,7 +446,6 @@ def test_rejects_reference_to_tombstoned_app(tmp_path):
         removed=[{"name": "demo-app", "reason": "withdrawn", "since": "2026-01-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
@@ -436,7 +469,6 @@ def test_reinstated_app_may_be_referenced_again(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-06-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert errors_for(tmp_path, registry, editorial) == []
@@ -450,7 +482,6 @@ def test_removal_newer_than_reinstatement_still_tombstoned(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-06-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
@@ -468,7 +499,6 @@ def test_same_day_reinstatement_fails_closed(tmp_path):
         reinstated=[{"name": "demo-app", "since": "2026-07-01"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert any("tombstoned" in e for e in errors_for(tmp_path, registry, editorial))
@@ -571,7 +601,6 @@ def test_bogus_reinstatement_date_is_rejected(tmp_path):
         reinstated=[{"name": "demo-app", "since": "9999-99-99"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[{"type": "app", "appRef": "demo-app"}]
     )
     assert errors_for(tmp_path, registry, editorial) != []
@@ -593,11 +622,10 @@ def test_cross_document_layer_fails_closed_on_a_bogus_date():
         reinstated=[{"name": "demo-app", "since": "9999-99-99"}],
     )
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[{"type": "app", "appRef": "demo-app"}]
     )
     findings = Findings()
-    check_cross_document(registry, editorial, findings)
+    check_cross_document(registry, editorial, base_order(), findings)
 
     assert any("invalid 'since'" in e for e in findings.errors)
     # The important half: the app must not have gone live.
@@ -678,26 +706,15 @@ def test_rejects_empty_subdir(tmp_path):
     assert errors_for(tmp_path, base_registry(entry), base_editorial()) != []
 
 
-def test_requires_category_order(tmp_path):
-    """Without an order a category has no defined placement.
-
-    Uniqueness can only be checked among values that are present, so an
-    order-less category would land wherever array position put it.
-    """
-    editorial = base_editorial(categories=[{"id": "dev", "label": "Dev"}])
-    assert errors_for(tmp_path, base_registry(), editorial) != []
-
-
 def test_duplicate_ref_in_one_collection_is_still_a_single_app(tmp_path):
     """A collection listing the same app twice is a curator slip, not two apps."""
     registry = base_registry(app("demo-app", categories=["dev"]))
     editorial = base_editorial(
-        categories=[{"id": "dev", "label": "Dev", "order": 10}],
         sections=[
             {"type": "collection", "title": "Picks", "appRefs": ["demo-app", "demo-app"]}
         ]
     )
-    assert errors_for(tmp_path, registry, editorial) != []
+    assert errors_for(tmp_path, registry, editorial, base_order("dev")) != []
 
 
 def _strip_annotations(node):
@@ -753,8 +770,8 @@ def test_editorial_example_is_valid():
     assert [e.message for e in Draft202012Validator(schema).iter_errors(doc)] == []
 
 
-def test_examples_are_a_consistent_pair():
-    """Every app the editorial example references must exist in the registry example.
+def test_examples_are_mutually_consistent():
+    """Every reference an example makes must resolve in the example it points at.
 
     Uses the cross-document checker directly: the published example carries
     generated fields, so it cannot go through validate(), which holds authored
@@ -766,6 +783,7 @@ def test_examples_are_a_consistent_pair():
     check_cross_document(
         load_example("official-registry.full.json"),
         load_example("editorial.full.json"),
+        load_example("category-order.full.json"),
         findings,
     )
     assert findings.errors == []
@@ -801,15 +819,18 @@ def builtin(
     return entry
 
 
-def _editorial_with_developer_tools() -> dict:
-    return base_editorial(
-        categories=[{"id": "developer-tools", "label": "Developer Tools", "order": 10}]
-    )
+def _order_with_developer_tools() -> dict:
+    return base_order("developer-tools")
 
 
 def test_accepts_a_builtin_entry(tmp_path):
     assert (
-        errors_for(tmp_path, base_registry(builtin()), _editorial_with_developer_tools())
+        errors_for(
+            tmp_path,
+            base_registry(builtin()),
+            base_editorial(),
+            _order_with_developer_tools(),
+        )
         == []
     )
 
@@ -820,7 +841,7 @@ def test_accepts_a_builtin_without_minclientversion(tmp_path):
     update before it can use it."""
     entry = builtin()
     assert "minClientVersion" not in entry["source"]
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) == []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) == []
 
 
 @pytest.mark.parametrize(
@@ -833,7 +854,7 @@ def test_accepts_real_shipping_version_shapes(tmp_path, version):
     would make the earliest carrying release unnameable for anything that first
     shipped on a nightly."""
     entry = builtin(minClientVersion=version)
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) == []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) == []
 
 
 @pytest.mark.parametrize(
@@ -852,7 +873,7 @@ def test_rejects_a_malformed_minclientversion(tmp_path, version):
     payload validates, gets signed, and renders. Both are under the 32-char cap,
     so each fails on the ANCHOR rather than on length."""
     entry = builtin(minClientVersion=version)
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) != []
 
 
 def test_rejects_a_builtin_carrying_a_top_level_url(tmp_path):
@@ -860,20 +881,20 @@ def test_rejects_a_builtin_carrying_a_top_level_url(tmp_path):
     target for code the client already has."""
     entry = builtin()
     entry["source"]["url"] = "https://github.com/kirodotdev/KiroCrew.git"
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) != []
 
 
 def test_rejects_a_builtin_carrying_a_top_level_ref(tmp_path):
     entry = builtin()
     entry["source"]["ref"] = "a" * 40
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) != []
 
 
 def test_rejects_a_builtin_with_no_manifest_from(tmp_path):
     """Publish has to read the app's app.json from somewhere to derive display
     fields; without it the entry would bake to identity alone."""
     entry = {"name": "demo-app", "source": {"type": "builtin"}, "categories": ["developer-tools"]}
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) != []
 
 
 @pytest.mark.parametrize(
@@ -890,7 +911,7 @@ def test_rejects_a_non_https_manifest_from_url(tmp_path, url):
     restriction as any other source url -- being publish-time-only does not make
     it inert."""
     entry = builtin(manifest_from={"url": url, "ref": "main"})
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) != []
 
 
 @pytest.mark.parametrize(
@@ -905,7 +926,7 @@ def test_rejects_an_escaping_manifest_from_subdir(tmp_path, subdir):
             "subdir": subdir,
         }
     )
-    assert errors_for(tmp_path, base_registry(entry), _editorial_with_developer_tools()) != []
+    assert errors_for(tmp_path, base_registry(entry), base_editorial(), _order_with_developer_tools()) != []
 
 
 # --------------------------------------------------------------------------

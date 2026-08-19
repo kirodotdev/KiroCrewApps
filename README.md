@@ -22,30 +22,63 @@ in the KiroCrew repository. This README covers the mechanics.
 | Path | What it is |
 |---|---|
 | `catalog/official-registry.json` | **Authored** app catalog — the file curators edit |
-| `catalog/editorial.json` | **Authored** taxonomy, category membership, and Discover layout |
+| `catalog/editorial.json` | **Authored** Discover layout — which apps are featured, and how |
+| `catalog/category-order.json` | **Authored** order of the category rail, and nothing else |
 | `schema/authored-registry.schema.json` | Contract for authored input (what a human may write) |
 | `schema/official-registry.schema.json` | Contract for the **published** document (the wire format) |
 | `schema/editorial.schema.json` | Contract for the editorial feed |
+| `schema/category-order.schema.json` | Contract for the rail order |
 | `tools/validate.py` | The gate: schema + cross-document invariants, offline |
 | `tools/publish.py` | Resolve → bake → stamp → sign the published documents |
 | `tools/verify_dist.py` | Verifies published artifacts against `keys/*.pub` |
 | `tools/format.py` | Normalizes authored files so diffs stay semantic |
 | `tests/` | Proves the gate still rejects what it should |
 
-## Two documents, deliberately
+## Three documents, deliberately
 
-Splitting the catalog from the editorial feed keeps each answerable to one
-question. The registry answers *what an app is and where its bytes come from*.
-Editorial answers *how the store presents apps*. Consequences worth knowing:
+Each is answerable to one question. The registry answers *what an app is and
+where its bytes come from*. The editorial feed answers *which apps the store
+features, and how*. The rail order answers *what sequence the categories appear
+in*. Consequences worth knowing:
 
 - Editorial only ever **references** apps by name. App data always resolves
   through the registry, so a curated feed cannot introduce a phantom app or
   spoof an existing one.
-- The registry carries **no presentation at all** — no categories, no ordering,
-  no copy. Re-theming the store never touches the catalog.
-- Category **membership** is curator-assigned in editorial, not derived from an
-  app's own tags. Otherwise an author could self-promote into a curated
+- The registry carries **no presentation at all** — no ordering, no copy.
+  Re-theming the store never touches the catalog.
+- Category **membership** is stated on the app's own registry entry, so an app
+  and its placement are one edit and a reference to an app that does not exist
+  cannot be written down. It is curator-assigned rather than derived from the
+  app's own tags — otherwise an author could self-promote into a curated
   category by editing their own `app.json`.
+
+### Why the rail order is not a key in the editorial feed
+
+The two never reference each other: a section names apps, never a category. They
+shared a file without sharing a subject.
+
+What makes the split worth a third document is the **version gate**. A client
+refuses a document whose `schemaVersion` it does not recognise — whole, and
+deliberately, because a client that keeps reading the fields it recognises is
+acting on a contract it cannot name. Bundled, a bump made for a featuring layout
+would take the rail order down with it and quietly re-sort every category on an
+older client. Separate documents mean separate gates, which is how each contract
+evolves without reaching into the other.
+
+Two things the rail-order document does **not** own, so nobody looks for them
+there:
+
+- **Display names.** A category label has to exist in all the languages the
+  dashboard ships, and a published document can carry one string. The client
+  holds the labels as translation keys and resolves them at render time. An
+  earlier revision of the editorial schema carried a `label` field for this; no
+  reader ever consumed it.
+- **Membership.** On the app's registry entry, as above.
+
+So its only authority is sequence, and **sequence is array position** — there is
+no numeric rank. A rank would need two invariants of its own (ranks unique, plus
+a tie-break for equal ranks) and buys nothing an array does not already give,
+since inserting a category is inserting an element.
 
 ## Two registry schemas, deliberately
 
@@ -87,8 +120,8 @@ Adding an app is two fields:
 ```
 
 Then set `"categories": ["my-category"]` on the app's own entry in
-`catalog/official-registry.json`, naming exactly one id that `catalog/editorial.json`
-declares. Membership lives on the app rather than in a list somewhere else, so an
+`catalog/official-registry.json`, naming exactly one id that
+`catalog/category-order.json` lists. Membership lives on the app rather than in a list somewhere else, so an
 app and its placement are one edit and a reference to an app that does not exist
 cannot be written down.
 An app in no category still appears — it lands in the default bucket rather than
@@ -107,8 +140,6 @@ then render wrong in the store:
   of the taxonomy; an app that belongs in more than one place is served by a
   `collection` section or by search keywords, neither of which changes where
   the taxonomy files it.
-- `categories[].order` values are unique, so the rail sequence does not depend
-  on array position.
 - No duplicate app names or category ids.
 - A reinstatement has a matching tombstone. A reinstatement is the only thing
   that clears a persisted tombstone, so one with a typo'd name would otherwise
@@ -185,8 +216,8 @@ python tools/publish.py --out dist --dry-run
 KIROCREW_REGISTRY_KMS_KEY_ID=alias/kirocrew-apps-registry python tools/publish.py --out dist
 ```
 
-Output is `official-registry.json`, `editorial.json`, and a `.sig` sidecar for
-each.
+Output is `official-registry.json`, `editorial.json`, `category-order.json`, and
+a `.sig` sidecar for each.
 
 The private half never leaves KMS. Publishing asks for a signature over a digest
 it computed; it cannot read key material, so access to a runner buys signing for
@@ -233,6 +264,7 @@ bytes that disagree with the pin.
 ```
 https://apps.crew.kiro.dev/official-registry.json
 https://apps.crew.kiro.dev/editorial.json
+https://apps.crew.kiro.dev/category-order.json
 ```
 
 `docs/distribution.md` has the bucket, the OIDC role, the object layout, and the

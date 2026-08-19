@@ -1,0 +1,44 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://schemas.crew.kiro.dev/category-order.schema.json",
+  "title": "Kiro Crew App Store — category rail order",
+  "description": "The sequence of the Discover page's category rail, and nothing else.\n\nThis is a document of its own rather than a key in `editorial.json` because the two answer different questions and never reference each other: a section names apps, never a category, so the two payloads shared a file without sharing a subject. Splitting them also splits the VERSION GATE, which is what actually matters -- a client refuses a document whose `schemaVersion` it does not recognise, whole, by design. Bundled, a schema bump made for a featuring layout would drop the rail order too and quietly re-sort every category on an older client.\n\nWhat this document does NOT own, so nobody looks for it here:\n\n- **Display names.** A category label has to exist in every language the dashboard ships, and this document can carry one string. The client holds the labels as translation keys and resolves them at render time; a label published here could only ever be English, and an earlier revision of this schema carried exactly that -- a `label` field no reader consumed.\n- **Membership.** Which apps are in a category is stated on each app's own entry in the registry, so an app and its placement are one edit.\n\nSo the only authority here is sequence, which is why the file is named for it.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "categories"],
+  "properties": {
+    "schemaVersion": {
+      "description": "Bumped for a breaking change to this document alone. Independent of the registry's and the editorial feed's versions -- that independence is the reason this file exists.",
+      "type": "integer",
+      "const": 1
+    },
+    "generatedAt": {
+      "description": "Stamped at publish time. Forbidden in authored input, like every other generated field.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "revision": {
+      "description": "Stamped at publish time; content-derived, so an unchanged order republishes to the same revision.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64
+    },
+    "categories": {
+      "description": "Category ids, in the order the rail shows them.\n\nORDER IS ARRAY POSITION. An earlier revision carried a numeric `order` on each entry, which bought nothing a JSON array does not already give -- inserting a category is inserting an element -- and cost two invariants: ranks had to be unique, and equal ranks needed a documented tie-break. Position cannot be duplicated, so both are gone.\n\nAn id the registry never assigns is allowed: a category may be declared ahead of the app that will fill it. The validator says so as a warning, because the opposite (an app naming a category nobody declared) is the error.",
+      "type": "array",
+      "minItems": 1,
+      "maxItems": 30,
+      "uniqueItems": true,
+      "items": { "$ref": "#/$defs/categoryId" }
+    }
+  },
+  "$defs": {
+    "categoryId": {
+      "description": "A stable machine id, never display copy. Lowercase kebab-case so it can appear in a URL and in a CSS selector without escaping.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 64,
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    }
+  }
+}

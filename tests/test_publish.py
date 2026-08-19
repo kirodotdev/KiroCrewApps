@@ -1083,14 +1083,10 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
         + "\n"
     )
     (catalog / "editorial.json").write_text(
-        json.dumps(
-            {
-                "schemaVersion": 1,
-                "categories": [{"id": "dev", "label": "Dev", "order": 10}],
-            },
-            indent=2,
-        )
-        + "\n"
+        json.dumps({"schemaVersion": 1}, indent=2) + "\n"
+    )
+    (catalog / "category-order.json").write_text(
+        json.dumps({"schemaVersion": 1, "categories": ["dev"]}, indent=2) + "\n"
     )
     monkeypatch.setattr(publish, "CATALOG_DIR", catalog)
 
@@ -1109,9 +1105,11 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
         url_def.pop("pattern", None)
         url_def["minLength"] = 1
         (relaxed / name).write_text(json.dumps(schema))
-    (relaxed / "editorial.schema.json").write_text(
-        (publish.SCHEMA_DIR / "editorial.schema.json").read_text()
-    )
+    # Copied verbatim, unlike the two above: neither carries a url pattern to
+    # relax, and the publish step checks both the authored and the published
+    # form against them.
+    for name in ("editorial.schema.json", "category-order.schema.json"):
+        (relaxed / name).write_text((publish.SCHEMA_DIR / name).read_text())
 
     import validate as validate_mod
     monkeypatch.setattr(validate_mod, "SCHEMA_DIR", relaxed)

@@ -1028,6 +1028,25 @@ def build_editorial(
     }
 
 
+def build_category_order(authored: dict[str, Any], now: datetime) -> dict[str, Any]:
+    """Stamp the rail order for publication.
+
+    Nothing is resolved, baked or fetched: the document is a list of ids the
+    curator wrote, and its whole contract is the sequence they wrote them in. So
+    this is the stamping half of `build_editorial` with no compile step -- which
+    is also why it takes no `Findings`, having no field it could degrade.
+    """
+    stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+    doc = {k: v for k, v in authored.items() if k != "schemaVersion"}
+    content_only = {k: v for k, v in doc.items() if k not in ("generatedAt", "revision")}
+    return {
+        "schemaVersion": 1,
+        "generatedAt": stamped,
+        "revision": f"{stamped}-{content_digest(content_only)[:7]}",
+        **doc,
+    }
+
+
 KMS_SIGNING_ALGORITHM = "RSASSA_PKCS1_V1_5_SHA_256"
 KMS_KEY_SPEC = "RSA_3072"
 
@@ -1126,9 +1145,10 @@ def publish(
 
     registry_path = CATALOG_DIR / "official-registry.json"
     editorial_path = CATALOG_DIR / "editorial.json"
+    order_path = CATALOG_DIR / "category-order.json"
 
     # Never publish something the gate would reject.
-    pre = validate(registry_path, editorial_path)
+    pre = validate(registry_path, editorial_path, order_path)
     findings.errors.extend(pre.errors)
     findings.warnings.extend(pre.warnings)
     if pre.errors:
@@ -1136,6 +1156,7 @@ def publish(
 
     authored_registry = json.loads(registry_path.read_text(encoding="utf-8"))
     authored_editorial = json.loads(editorial_path.read_text(encoding="utf-8"))
+    authored_order = json.loads(order_path.read_text(encoding="utf-8"))
     now = datetime.now(timezone.utc)
 
     resolver: Callable[[str, str], str]
@@ -1163,6 +1184,7 @@ def publish(
         return findings
 
     editorial_doc = build_editorial(authored_editorial, now, art, findings)
+    order_doc = build_category_order(authored_order, now)
 
     # The output is held to the PUBLISHED contract, which is stricter than the
     # authored one. This is what catches a resolver that returned a branch name
@@ -1173,12 +1195,19 @@ def publish(
     check_schema(
         editorial_doc, SCHEMA_DIR / "editorial.schema.json", "published editorial", findings
     )
+    check_schema(
+        order_doc,
+        SCHEMA_DIR / "category-order.schema.json",
+        "published category-order",
+        findings,
+    )
     if findings.errors:
         return findings
 
     artifacts = {
         "official-registry.json": canonical_bytes(registry_doc),
         "editorial.json": canonical_bytes(editorial_doc),
+        "category-order.json": canonical_bytes(order_doc),
     }
 
     if dry_run:
