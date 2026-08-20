@@ -236,35 +236,40 @@ def verify_hosted_artwork(dist: Path) -> list[str]:
     for idx, section in enumerate(doc.get("sections") or []):
         if not isinstance(section, dict):
             continue
-        art = section.get("artwork")
-        if not isinstance(art, dict):
-            continue
-        for field in ("ref", "refDark"):
-            ref = art.get(field)
-            if not isinstance(ref, str) or not ref:
+        # Artwork hangs off items. Reading `sections[].artwork` would find
+        # nothing and report a clean chain for a document full of images.
+        for jdx, entry in enumerate(section.get("items") or []):
+            if not isinstance(entry, dict):
                 continue
-            where = f"sections[{idx}].artwork.{field}"
-            # A published ref MUST be the content-addressed form. An authored
-            # path that reached the output means the bake step was skipped, and
-            # that is a hole in the integrity chain, not a cosmetic slip.
-            if not ref.startswith("assets/editorial/"):
-                problems.append(
-                    f"{where} names {ref!r}, which is not a hosted asset path -- "
-                    f"the artwork bake step did not run"
-                )
+            art = entry.get("artwork")
+            if not isinstance(art, dict):
                 continue
-            path = dist / ref
-            if not path.is_file():
-                problems.append(f"{where} names {ref!r}, which is not in {dist}")
-                continue
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
-            if actual != path.stem:
-                problems.append(
-                    f"{where} {ref!r} is addressed by digest {path.stem!r} but its "
-                    f"bytes hash to {actual!r}"
-                )
-                continue
-            checked += 1
+            for field in ("ref", "refDark"):
+                ref = art.get(field)
+                if not isinstance(ref, str) or not ref:
+                    continue
+                where = f"sections[{idx}].items[{jdx}].artwork.{field}"
+                # A published ref MUST be the content-addressed form. An authored
+                # path that reached the output means the bake step was skipped,
+                # and that is a hole in the integrity chain, not a cosmetic slip.
+                if not ref.startswith("assets/editorial/"):
+                    problems.append(
+                        f"{where} names {ref!r}, which is not a hosted asset path -- "
+                        f"the artwork bake step did not run"
+                    )
+                    continue
+                path = dist / ref
+                if not path.is_file():
+                    problems.append(f"{where} names {ref!r}, which is not in {dist}")
+                    continue
+                actual = hashlib.sha256(path.read_bytes()).hexdigest()
+                if actual != path.stem:
+                    problems.append(
+                        f"{where} {ref!r} is addressed by digest {path.stem!r} but its "
+                        f"bytes hash to {actual!r}"
+                    )
+                    continue
+                checked += 1
     if checked:
         print(f"verified {checked} hosted editorial image(s) against their content digests")
     return problems

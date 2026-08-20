@@ -80,6 +80,29 @@ no numeric rank. A rank would need two invariants of its own (ranks unique, plus
 a tie-break for equal ranks) and buys nothing an array does not already give,
 since inserting a category is inserting an element.
 
+### What a `form` may and may not say
+
+Each entry in `sections` is one **block** of the Discover page: a `form` saying
+how its contents are arranged, and the `items` it arranges. The page below is two
+blocks — a full-width card, then a row of two — and that is two entries, not
+three.
+
+Writing the grouping down is the point. With a flat list of cards the client had
+to infer arrangement from **array position** (first one full width, next two side
+by side), so the grouping a reader saw existed nowhere in the document, and a
+curator adding a fourth card had no way to say which block it joined.
+
+The line a `form` may not cross is **measures**. `full`, `row` and `carousel` all
+mean something on a phone as well as a desktop — a row still scrolls sideways
+when it shows one and a half cards instead of four. `two-column`, `3-up`, a pixel
+width or a card height cannot be honoured on a narrow viewport, so they stay in
+the client, where the viewport is known. Author the relationship; let the client
+resolve the geometry.
+
+`carousel` is defined but **no client draws it yet**: a published carousel is
+skipped whole, so it validates, signs, ships and stays invisible. `full` and
+`row` are the two that render today.
+
 ## Two registry schemas, deliberately
 
 Authored input and published output are not the same shape, and conflating them

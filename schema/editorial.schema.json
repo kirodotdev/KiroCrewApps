@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://schemas.crew.kiro.dev/appstore/editorial-v1.schema.json",
   "title": "KiroCrew App Store editorial feed",
-  "description": "How the store FEATURES apps: the Discover page's editorial layout. The category rail's order is a document of its own (`category-order.json`) because the two never reference each other -- a section names apps, never a category -- and because sharing a file would mean sharing a version gate, so a bump made here would re-sort every category on an older client. Only REFERENCES apps by name -- app data always resolves through the registry, so editorial can never inject a phantom or spoofed app. Read tolerantly: unknown section types are skipped, and a section that fails validation is dropped individually rather than failing the page.",
+  "description": "How the store FEATURES apps: the Discover page's editorial layout. Each entry in `sections` is one BLOCK of the page -- a `form` saying how its contents are arranged, and the `items` it arranges -- so the grouping a reader sees is written down rather than inferred from array position. The category rail's order is a document of its own (`category-order.json`) because the two never reference each other -- an item names apps, never a category -- and because sharing a file would mean sharing a version gate, so a bump made here would re-sort every category on an older client. Only REFERENCES apps by name -- app data always resolves through the registry, so editorial can never inject a phantom or spoofed app. Read tolerantly: an unknown `form` skips its whole block, an unknown item `type` skips just that card, and anything that fails validation is dropped individually rather than failing the page.",
 
   "type": "object",
   "additionalProperties": false,
@@ -23,10 +23,10 @@
     "revision": { "type": "string", "minLength": 1 },
 
     "sections": {
-      "description": "Ordered Discover layout. Data-driven, not a fixed template -- new layouts are new `type` values, which is what lets the store's appearance change without a client release.",
+      "description": "Ordered Discover layout. Each entry is one BLOCK of the page, and it declares its `form` -- how its contents are arranged relative to each other -- plus the `items` it arranges. A block is the unit the reader perceives: the page below is two blocks, not three cards, and saying so here is what stops the client inferring grouping from array position.\n\nThe forms are viewport-INDEPENDENT on purpose. `full`, `row` and `carousel` each have a meaning on a phone as well as a desktop -- a row still scrolls horizontally when it only shows one and a half cards. What must never appear here is a MEASURE: `two-column`, `3-up`, a pixel width or a card height cannot be honoured on a narrow viewport, so those stay in the client where the viewport is known. The curator authors relationships; the client resolves geometry.",
       "type": "array",
       "items": { "$ref": "#/$defs/section" },
-      "maxItems": 40
+      "maxItems": 12
     }
   },
 
@@ -39,7 +39,7 @@
     },
 
     "artwork": {
-      "description": "Editorial artwork for a section, authored by the CURATOR and hosted by the catalog. Shared across every section variant on purpose: artwork is orthogonal to what a section contains, so a future variant inherits it without touching this definition. Raster only -- an SVG is a script host, and a regex screen over untrusted XML was defeated three separate ways.\n\nTWO FORMS, ONE FIELD. Authored, `ref` is a path to a file in THIS repository (`art/spotlight-tasks.png`) -- the curator cannot know a digest that does not exist until publish runs. Published, the same key holds the content-addressed path the publish step emitted (`assets/editorial/<sha256>.png`), whose digest is covered by the document signature and is what gives a client end-to-end integrity for bytes carrying no signature of their own. The pattern below admits both because one schema validates both stages; `verify_dist` is what proves the published form is the addressed one.",
+      "description": "Editorial artwork for an item, authored by the CURATOR and hosted by the catalog. Shared across every item variant on purpose: artwork is orthogonal to what an item contains, so a future variant inherits it without touching this definition. Raster only -- an SVG is a script host, and a regex screen over untrusted XML was defeated three separate ways.\n\nTWO FORMS, ONE FIELD. Authored, `ref` is a path to a file in THIS repository (`art/spotlight-tasks.png`) -- the curator cannot know a digest that does not exist until publish runs. Published, the same key holds the content-addressed path the publish step emitted (`assets/editorial/<sha256>.png`), whose digest is covered by the document signature and is what gives a client end-to-end integrity for bytes carrying no signature of their own. The pattern below admits both because one schema validates both stages; `verify_dist` is what proves the published form is the addressed one.",
       "type": "object",
       "additionalProperties": false,
       "required": ["ref"],
@@ -68,15 +68,76 @@
     },
 
     "section": {
-      "description": "Closed per known variant, but the CLIENT must skip an unrecognized `type` rather than reject the document. Validating strictly here is for the publish gate; the reader is deliberately more tolerant.\n\nEXTENDING THIS. A new presentation shape gets a NEW `type` value, never a sub-discriminator inside an existing variant: the client-side rule above makes an unknown `type` safe (skipped until support ships), whereas a flag inside an existing variant would make every older client render the new shape as a broken old one.\n\nA variant earns its place by having a SURFACE, not by being conceivable. Only add one when a client is ready to draw it -- a type with no renderer validates, publishes, and then silently vanishes into the reader's skip path, which looks exactly like a bug from the curator's side.",
+      "description": "One block of the Discover page: a `form` and the `items` it arranges. Closed per known form here, but the CLIENT must skip an unrecognized `form` -- the whole block, items included -- rather than reject the document. Validating strictly is for the publish gate; the reader is deliberately more tolerant, and that tolerance is what lets a new form publish before every client can draw it.\n\nWHY TWO LEVELS. `form` answers 'how are these arranged', `items[].type` answers 'what is each one'. Collapsing them into one enum is what the earlier single-level shape did, and it forced the client to infer arrangement from ARRAY POSITION -- the first entry rendered full-width, the next two side by side, with the grouping existing nowhere in the document. A curator who then added a fourth entry had no way to say which block it joined.\n\nEXTENDING THIS. A new arrangement gets a new `form` value; a new kind of card gets a new `items[].type`. Never a sub-discriminator inside an existing variant: an unknown `form` or `type` is safe because it is skipped, whereas a flag inside a variant the client already recognises makes every older client render the new shape as a broken old one.",
       "type": "object",
       "oneOf": [
-        { "$ref": "#/$defs/sectionApp" },
-        { "$ref": "#/$defs/sectionCollection" }
+        { "$ref": "#/$defs/sectionFull" },
+        { "$ref": "#/$defs/sectionRow" },
+        { "$ref": "#/$defs/sectionCarousel" }
       ]
     },
 
-    "sectionApp": {
+    "sectionFull": {
+      "title": "full -- one item across the whole width",
+      "description": "`items` holds EXACTLY one, and that is a property of the form rather than a limit imposed on it: two things that each occupy the full width can only stack, and stacked full-width blocks are two `full` sections. A bound of one here means the schema states the fact instead of leaving the client to enforce it.\n\nThis is the loudest placement on the page, which is also where a card carrying no artwork shows worst -- it renders as text alone in the slot most likely to be seen.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["form", "items"],
+      "properties": {
+        "form": { "const": "full" },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/item" },
+          "minItems": 1,
+          "maxItems": 1
+        }
+      }
+    },
+
+    "sectionRow": {
+      "title": "row -- items side by side, scrolling horizontally when they overflow",
+      "description": "For items meant to be COMPARED. The client lays them out across the available width and scrolls what does not fit; on a narrow viewport that is one and a half cards and a swipe, which is the same relationship expressed at a different size.\n\n`minItems` is 2 for the same reason a `collection` needs two apps: one item has nothing to sit beside, and a row of one renders as a half-width card against empty space. A curator with a single item to feature wants `full`, which is a statement that it deserves the width.\n\n`maxItems` is 6 because everything past the first screenful of a horizontal scroller is seen by almost nobody -- a cap the reader will not reach is a cap that silently discards curation.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["form", "items"],
+      "properties": {
+        "form": { "const": "row" },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/item" },
+          "minItems": 2,
+          "maxItems": 6
+        }
+      }
+    },
+
+    "sectionCarousel": {
+      "title": "carousel -- one item at a time, advanced by the reader",
+      "description": "For items that each deserve the full width and cannot share it. Unlike `row`, the reader sees one and navigates; the value is that the block's HEIGHT is fixed no matter how many items it holds, so a curator can add a fourth story without the page growing.\n\nNO RENDERER SHIPS FOR THIS FORM YET. It is defined here so the vocabulary is settled, but a published `carousel` is skipped whole by every current client -- validated, signed, delivered, and invisible. Do not author one expecting it to appear; the client-side implementation is what makes this form real, and until then `row` and `full` are the two that draw.\n\n`minItems` is 2 because a carousel of one is a `full` section with a control that does nothing.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["form", "items"],
+      "properties": {
+        "form": { "const": "carousel" },
+        "items": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/item" },
+          "minItems": 2,
+          "maxItems": 6
+        }
+      }
+    },
+
+    "item": {
+      "description": "One card inside a section. `type` says what it contains; the enclosing section's `form` says how it is arranged with its siblings. The client must skip an unrecognized `type` and keep the rest of the section, which is a narrower failure than skipping the block: an unknown FORM means the arrangement cannot be drawn at all, an unknown TYPE means one card cannot.\n\nA variant earns its place by having a SURFACE, not by being conceivable. A type with no renderer validates, publishes, and then silently vanishes into the reader's skip path, which looks exactly like a bug from the curator's side.",
+      "type": "object",
+      "oneOf": [
+        { "$ref": "#/$defs/itemApp" },
+        { "$ref": "#/$defs/itemCollection" }
+      ]
+    },
+
+    "itemApp": {
       "title": "app -- featured placement for ONE app",
       "description": "The app's own name is the heading, so there is no `title`: a curator who wants to say something other than the app's name is describing a collection of one, and a collection is the variant that carries a theme.\n\nSeparate from `collection` because the two differ in what they REQUIRE, not merely in how many apps they hold: a collection is meaningless without a theme, and this variant is meaningless with one. Expressing both as a single variant with a variable-length list forces `title` to be optional everywhere and pushes 'required when more than one' into code the schema cannot see.",
       "type": "object",
@@ -94,7 +155,7 @@
       }
     },
 
-    "sectionCollection": {
+    "itemCollection": {
       "title": "collection -- several apps under a curator's theme",
       "description": "`title` is REQUIRED: the theme is the entire reason several unrelated apps appear together, and an untitled collection gives the reader no way to understand why these apps share a card.\n\n`minItems` is 2 because a one-app collection is an `app` placement wearing a costume. `maxItems` is small because every member is RENDERED -- there is no collection detail page to hold an overflow, so a cap the card cannot draw would silently discard members that validated and published. Raising it requires giving the card somewhere to put them first.",
       "type": "object",

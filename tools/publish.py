@@ -974,17 +974,13 @@ def bake_editorial_artwork(
     if not isinstance(sections, list) or assets is None:
         return doc
 
-    baked: list[Any] = []
-    for idx, section in enumerate(sections):
-        if not isinstance(section, dict) or "artwork" not in section:
-            baked.append(section)
-            continue
-        art = section.get("artwork")
+    def bake_item(item: Any, where: str) -> Any:
+        if not isinstance(item, dict) or "artwork" not in item:
+            return item
+        art = item.get("artwork")
         if not isinstance(art, dict):
-            baked.append(section)
-            continue
+            return item
 
-        where = f"sections[{idx}]"
         out = dict(art)
         for key in ("ref", "refDark"):
             rel = art.get(key)
@@ -996,14 +992,29 @@ def bake_editorial_artwork(
             else:
                 out.pop(key, None)
 
-        section_out = dict(section)
+        item_out = dict(item)
         # `ref` is required by the schema, so artwork that lost its light variant
         # is no longer valid artwork -- drop the whole block rather than emit a
         # dark-only object the published-schema check would then reject.
         if "ref" in out:
-            section_out["artwork"] = out
+            item_out["artwork"] = out
         else:
-            section_out.pop("artwork", None)
+            item_out.pop("artwork", None)
+        return item_out
+
+    baked: list[Any] = []
+    for idx, section in enumerate(sections):
+        # Artwork hangs off items, not the section: a section carries only its
+        # `form` and the list. A section that is not a dict, or whose items are
+        # not a list, rides through untouched for the schema check to reject.
+        if not isinstance(section, dict) or not isinstance(section.get("items"), list):
+            baked.append(section)
+            continue
+        section_out = dict(section)
+        section_out["items"] = [
+            bake_item(item, f"sections[{idx}].items[{jdx}]")
+            for jdx, item in enumerate(section["items"])
+        ]
         baked.append(section_out)
 
     return {**doc, "sections": baked}

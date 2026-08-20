@@ -59,10 +59,23 @@ def repo(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def section(**over):
+def item(**over):
     base = {"type": "app", "appRef": "demo", "artwork": {"ref": "art/hero.png"}}
     base.update(over)
     return base
+
+
+def section(**over):
+    """A `full` section wrapping one app item -- artwork hangs off the ITEM."""
+    return {"form": "full", "items": [item(**over)]}
+
+
+def card(doc, idx=0, jdx=0):
+    return doc["sections"][idx]["items"][jdx]
+
+
+def art(doc, idx=0, jdx=0):
+    return card(doc, idx, jdx).get("artwork")
 
 
 class TestIngestion:
@@ -137,8 +150,8 @@ class TestIngestion:
             section(artwork={"ref": "art/hero.png"}),
         ]}
         out = bake_editorial_artwork(doc, EditorialAssets(repo), f)
-        assert "artwork" not in out["sections"][0], "the broken one loses its picture"
-        assert out["sections"][1]["artwork"]["ref"].startswith(f"{EDITORIAL_ASSET_DIR}/")
+        assert art(out) is None, "the broken one loses its picture"
+        assert art(out, 1)["ref"].startswith(f"{EDITORIAL_ASSET_DIR}/")
 
     def test_a_missing_file_is_refused(self, repo):
         f = Findings()
@@ -171,9 +184,9 @@ class TestBaking:
         f = Findings()
         doc = {"sections": [section(artwork={"ref": "art/hero.png", "refDark": "art/hero-dark.png"})]}
         out = bake_editorial_artwork(doc, EditorialAssets(repo), f)
-        art = out["sections"][0]["artwork"]
-        assert art["ref"].startswith(f"{EDITORIAL_ASSET_DIR}/")
-        assert art["refDark"].startswith(f"{EDITORIAL_ASSET_DIR}/")
+        a = art(out)
+        assert a["ref"].startswith(f"{EDITORIAL_ASSET_DIR}/")
+        assert a["refDark"].startswith(f"{EDITORIAL_ASSET_DIR}/")
 
     def test_the_authored_document_is_not_mutated(self, repo):
         f = Findings()
@@ -184,7 +197,9 @@ class TestBaking:
 
     def test_a_section_without_artwork_passes_through(self, repo):
         f = Findings()
-        doc = {"sections": [{"type": "collection", "title": "Picks", "appRefs": ["a", "b"]}]}
+        doc = {"sections": [{"form": "full", "items": [
+            {"type": "collection", "title": "Picks", "appRefs": ["a", "b"]}
+        ]}]}
         assert bake_editorial_artwork(doc, EditorialAssets(repo), f) == doc
 
     def test_losing_the_light_variant_drops_the_whole_block(self, repo):
@@ -193,27 +208,27 @@ class TestBaking:
         f = Findings()
         doc = {"sections": [section(artwork={"ref": "art/nope.png", "refDark": "art/hero-dark.png"})]}
         out = bake_editorial_artwork(doc, EditorialAssets(repo), f)
-        assert "artwork" not in out["sections"][0]
-        assert out["sections"][0]["appRef"] == "demo", "the placement survives"
+        assert art(out) is None
+        assert card(out)["appRef"] == "demo", "the placement survives"
 
     def test_losing_only_the_dark_variant_keeps_the_light_one(self, repo):
         f = Findings()
         doc = {"sections": [section(artwork={"ref": "art/hero.png", "refDark": "art/nope.png"})]}
         out = bake_editorial_artwork(doc, EditorialAssets(repo), f)
-        art = out["sections"][0]["artwork"]
-        assert art["ref"].startswith(f"{EDITORIAL_ASSET_DIR}/")
-        assert "refDark" not in art
+        a = art(out)
+        assert a["ref"].startswith(f"{EDITORIAL_ASSET_DIR}/")
+        assert "refDark" not in a
 
     def test_alt_text_survives_baking(self, repo):
         f = Findings()
         doc = {"sections": [section(artwork={"ref": "art/hero.png", "alt": "A quiet timeline"})]}
         out = bake_editorial_artwork(doc, EditorialAssets(repo), f)
-        assert out["sections"][0]["artwork"]["alt"] == "A quiet timeline"
+        assert art(out)["alt"] == "A quiet timeline"
 
     def test_build_editorial_without_assets_leaves_artwork_alone(self):
         # The dry-run path passes no ingester; it must not silently strip artwork.
         doc = build_editorial({"schemaVersion": 1, "sections": [section()]}, NOW)
-        assert doc["sections"][0]["artwork"] == {"ref": "art/hero.png"}
+        assert art(doc) == {"ref": "art/hero.png"}
 
     def test_the_revision_changes_when_artwork_changes(self, repo):
         f = Findings()
