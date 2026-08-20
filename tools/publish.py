@@ -498,6 +498,21 @@ ICON_PX_MIN = 128
 #: Where hosted icons land, relative to the catalog root. Content-addressed, so
 #: the path is immutable and a client may cache it forever.
 ICON_ASSET_DIR = "assets/icons"
+#: Whether an entry that publishes no `iconRef` fails the run.
+#:
+#: A missing icon is a real defect and not a cosmetic one: the store falls back
+#: to a generated placeholder, and a placeholder is indistinguishable from an
+#: icon this pipeline dropped, so an iconless listing reads as a store bug. A
+#: store that gates on it makes the state unrepresentable instead -- Apple
+#: refuses the UPLOAD of a build carrying no 1024px icon, before review is even
+#: reachable -- which is where this is headed.
+#:
+#: It stays `False` while listed third-party apps ship no icon of any kind:
+#: erroring today would drop them from the catalog for a defect in THEIR
+#: repository rather than in this pipeline, which is a worse outcome than a
+#: placeholder. Flip it once every live entry publishes an `iconRef`;
+#: `test_a_missing_icon_can_be_promoted_to_an_error` pins that to this one line.
+ICON_MISSING_IS_ERROR = False
 
 
 def run_git_bytes(args: list[str], cwd: Path | None = None) -> bytes:
@@ -894,6 +909,42 @@ def bake_entry(
             if not ref:
                 continue
         entry[field] = ref
+    # State the OUTCOME once per app, here, where it is finally known. Every
+    # rejection above reports its own cause, but nothing reported the case where
+    # a manifest names no icon at all: `bake_asset_ref` is deliberately silent
+    # when NEITHER key is present, so such an app published a placeholder card
+    # with no diagnostic anywhere. That is how a built-in came to ship iconless
+    # while an `icon.svg` sat in the client's own asset directory, unread because
+    # its manifest never named it.
+    #
+    # Keyed on the ABSENCE of `iconRef` rather than on what the manifest said, so
+    # promoting the switch means "every live entry has an icon" -- an icon that
+    # was declared and then dropped has to fail too, or the gate would only cover
+    # the undeclared half. No dark-variant equivalent: that one is genuinely
+    # optional, since the client falls back to the light icon.
+    #
+    # An EMPTY manifest says nothing either way and is not diagnosed: `--dry-run`
+    # substitutes one on purpose, and "was never fetched" is a different claim
+    # from "declares no icon". Every other field skips silently for that reason;
+    # this one would otherwise print a finding per app on every dry run, which is
+    # how a reader learns to skim past the whole block.
+    if manifest and "iconRef" not in entry:
+        report = findings.error if ICON_MISSING_IS_ERROR else findings.warn
+        if manifest_str(manifest, "iconUrl") or manifest_str(manifest, "iconPath"):
+            # The specific cause is already reported above; do not repeat it, and
+            # do not tell a publisher to declare a key they did declare.
+            report(f"{name}: no icon published; the store renders a placeholder")
+        elif source_type == "builtin":
+            report(
+                f"{name}: no icon declared; the store renders a placeholder. "
+                f"Declare a top-level 'iconUrl' naming a path the client serves."
+            )
+        else:
+            report(
+                f"{name}: no icon declared; the store renders a placeholder. "
+                f"Declare a top-level 'iconPath' naming a raster file in the "
+                f"repository ({', '.join(sorted(ICON_EXT_ALLOWED))})."
+            )
     if hero := manifest_str(manifest, "heroImage"):
         entry["heroRef"] = hero
 

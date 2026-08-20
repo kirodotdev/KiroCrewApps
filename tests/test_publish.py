@@ -266,13 +266,63 @@ class TestBakesIconRefs:
         assert "iconRef" not in entry
         assert "iconRefDark" not in entry
 
-    def test_truly_iconless_app_warns_about_nothing(self):
-        """The wrong-key warning must not fire for an app that simply has no
-        icon, or every such app would carry a spurious finding."""
+    def test_truly_iconless_app_is_told_which_key_to_declare(self):
+        """An app with no icon at all used to publish a placeholder card with no
+        diagnostic anywhere, so the store looked broken rather than the manifest
+        incomplete. The wrong-key warning must still not fire: nothing was
+        declared under the other key either."""
         findings = Findings()
         manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
         publish.bake_entry(authored(), manifest, "a" * 40, findings)
-        assert not any("icon" in w.lower() for w in findings.warnings)
+        assert any("no icon declared" in w for w in findings.warnings)
+        assert any("'iconPath'" in w for w in findings.warnings)
+        assert not any("reads" in w for w in findings.warnings)
+        assert findings.errors == []
+
+    def test_a_builtin_with_no_icon_is_told_to_declare_the_absolute_key(self):
+        """The advice has to name the key THIS source type reads, or it sends the
+        publisher to the one that would be dropped."""
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
+        assert any("'iconUrl'" in w for w in findings.warnings)
+        assert not any("'iconPath'" in w for w in findings.warnings)
+
+    def test_a_dropped_icon_is_not_told_to_declare_what_it_declared(self):
+        """A rejected icon already reports its own cause. Repeating it as "no
+        icon declared" would both duplicate the finding and give false advice."""
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(), {**MANIFEST, "iconPath": "/etc/passwd"}, "a" * 40, findings
+        )
+        assert "iconRef" not in entry
+        assert any("no icon published" in w for w in findings.warnings)
+        assert not any("declared" in w and "Declare" in w for w in findings.warnings)
+
+    def test_a_missing_icon_can_be_promoted_to_an_error(self, monkeypatch):
+        """The gate is one switch. Two third-party entries ship no icon today, so
+        erroring now would drop them for a defect upstream; this pins that
+        flipping it later needs no other change."""
+        monkeypatch.setattr(publish, "ICON_MISSING_IS_ERROR", True)
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert findings.warnings == []
+        assert any("no icon declared" in e for e in findings.errors)
+
+    def test_an_app_with_an_icon_is_not_warned_about_one(self):
+        findings = Findings()
+        publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, findings)
+        assert not any("no icon" in w for w in findings.warnings)
+
+    def test_an_unfetched_manifest_is_not_diagnosed(self):
+        """`--dry-run` substitutes an empty manifest for all 22 entries. Warning
+        per app there would print more findings than a real publish does, none of
+        them true, which is how a reader learns to skim the block."""
+        findings = Findings()
+        publish.bake_entry(authored(), {}, "a" * 40, findings)
+        assert findings.warnings == []
+        assert findings.errors == []
 
     def test_wrong_key_for_the_source_type_is_named(self):
         """A publisher who used the other source type's key gets told which key
@@ -652,13 +702,21 @@ def test_revision_is_derived_from_content(tmp_path, allow_local_urls):
 
 
 def _bake(url: str, author, name: str = "some-app", curated=None):
-    """Bake one entry, as build_registry would. Returns (entry, findings)."""
+    """Bake one entry, as build_registry would. Returns (entry, findings).
+
+    The manifest carries an icon so these author assertions can keep demanding
+    NO warnings at all: an entry with no icon earns one of its own, and a
+    blanket-empty assertion is worth more than one narrowed to author findings.
+    """
     findings = publish.Findings()
     authored = {"name": name, "source": {"type": "git", "url": url, "ref": "main"}}
     if curated is not None:
         authored["author"] = curated
     entry = publish.bake_entry(
-        authored, {"name": name, "author": author}, "0" * 40, findings
+        authored,
+        {"name": name, "author": author, "iconPath": "assets/icon.png"},
+        "0" * 40,
+        findings,
     )
     return entry, findings
 
@@ -931,13 +989,18 @@ def test_a_curator_stated_author_is_how_a_builtin_gets_attributed():
 
 
 def _bake_builtin(manifest_author, curated=None):
+    """As `_bake`, for a builtin source; the icon is there for the same reason."""
     authored_entry = dict(BUILTIN)
     if curated is not None:
         authored_entry["author"] = curated
     findings = Findings()
     entry = publish.bake_entry(
         authored_entry,
-        {"name": "demo-app", "author": manifest_author},
+        {
+            "name": "demo-app",
+            "author": manifest_author,
+            "iconUrl": "/app-assets/demo-app/icon.svg",
+        },
         "b" * 40,
         findings,
     )
