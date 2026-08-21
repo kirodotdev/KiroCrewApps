@@ -1,4 +1,43 @@
 {
   "schemaVersion": 1,
-  "sections": []
+  "sections": [
+    {
+      "form": "full",
+      "items": [
+        {
+          "type": "app",
+          "appRef": "issue-radar",
+          "artwork": {
+            "ref": "art/issue-radar.png",
+            "alt": "Radar sweep over concentric rings, with triaged issue blips in green, amber and red and a faint queue of issue cards"
+          }
+        }
+      ]
+    },
+    {
+      "form": "row",
+      "items": [
+        {
+          "type": "collection",
+          "title": "Ship better code",
+          "blurb": "Spec it, review it, measure it: the loop that keeps a codebase honest.",
+          "appRefs": [
+            "spec-builder",
+            "code-review-sage",
+            "auto-improvement"
+          ]
+        },
+        {
+          "type": "collection",
+          "title": "Research to deliverable",
+          "blurb": "From open questions to a paper and the deck that presents it.",
+          "appRefs": [
+            "auto-research",
+            "papyrus",
+            "pptx-maker"
+          ]
+        }
+      ]
+    }
+  ]
 }
