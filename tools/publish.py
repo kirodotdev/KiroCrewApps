@@ -498,7 +498,8 @@ ICON_PX_MIN = 128
 #: Where hosted icons land, relative to the catalog root. Content-addressed, so
 #: the path is immutable and a client may cache it forever.
 ICON_ASSET_DIR = "assets/icons"
-#: Whether an entry that publishes no `iconRef` fails the run.
+#: Whether an entry that publishes no `iconRef` fails the run. Split by SOURCE
+#: TYPE, because "whose defect is it" has two different answers.
 #:
 #: A missing icon is a real defect and not a cosmetic one: the store falls back
 #: to a generated placeholder, and a placeholder is indistinguishable from an
@@ -507,12 +508,22 @@ ICON_ASSET_DIR = "assets/icons"
 #: refuses the UPLOAD of a build carrying no 1024px icon, before review is even
 #: reachable -- which is where this is headed.
 #:
-#: It stays `False` while listed third-party apps ship no icon of any kind:
+#: For a THIRD PARTY it stays `False` while listed apps ship no icon of any kind:
 #: erroring today would drop them from the catalog for a defect in THEIR
 #: repository rather than in this pipeline, which is a worse outcome than a
 #: placeholder. Flip it once every live entry publishes an `iconRef`;
 #: `test_a_missing_icon_can_be_promoted_to_an_error` pins that to this one line.
 ICON_MISSING_IS_ERROR = False
+#: For a BUILT-IN there is nothing upstream to wait for, so the same leniency
+#: buys nothing and costs the store a first-party card. The bytes ship in the
+#: client we release, the manifest read here lives in our own repository, and the
+#: only way to publish one iconless is for that manifest to omit `iconUrl` -- our
+#: edit, our fix, before a document goes out. That is not hypothetical: `channels`,
+#: `dev-fleet` and `workflows` each rendered a placeholder in the store for days
+#: after their `icon.svg` shipped, because the ref pinned here still named a
+#: manifest written before the icon was wired in, and a warning in a publish log
+#: nobody reads was the only signal.
+ICON_MISSING_IS_ERROR_BUILTIN = True
 
 
 def run_git_bytes(args: list[str], cwd: Path | None = None) -> bytes:
@@ -929,7 +940,12 @@ def bake_entry(
     # this one would otherwise print a finding per app on every dry run, which is
     # how a reader learns to skim past the whole block.
     if manifest and "iconRef" not in entry:
-        report = findings.error if ICON_MISSING_IS_ERROR else findings.warn
+        fatal = (
+            ICON_MISSING_IS_ERROR_BUILTIN
+            if source_type == "builtin"
+            else ICON_MISSING_IS_ERROR
+        )
+        report = findings.error if fatal else findings.warn
         if manifest_str(manifest, "iconUrl") or manifest_str(manifest, "iconPath"):
             # The specific cause is already reported above; do not repeat it, and
             # do not tell a publisher to declare a key they did declare.

@@ -96,7 +96,7 @@
         "type": "builtin",
         "manifestFrom": {
           "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "ref": "f68b77d2251622f878c0a57b57011c1272a6de2c",
           "subdir": "src/kiro_crew/apps/builtins/channels"
         }
       },
@@ -168,7 +168,7 @@
         "type": "builtin",
         "manifestFrom": {
           "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "ref": "f68b77d2251622f878c0a57b57011c1272a6de2c",
           "subdir": "src/kiro_crew/apps/builtins/dev_fleet"
         }
       },
@@ -384,7 +384,7 @@
         "type": "builtin",
         "manifestFrom": {
           "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
+          "ref": "f68b77d2251622f878c0a57b57011c1272a6de2c",
           "subdir": "src/kiro_crew/apps/builtins/workflows"
         }
       },
