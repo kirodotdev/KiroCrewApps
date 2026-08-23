@@ -281,12 +281,15 @@ class TestBakesIconRefs:
 
     def test_a_builtin_with_no_icon_is_told_to_declare_the_absolute_key(self):
         """The advice has to name the key THIS source type reads, or it sends the
-        publisher to the one that would be dropped."""
+        publisher to the one that would be dropped. Read off `errors` rather than
+        `warnings` because a built-in's missing icon is fatal (see
+        `ICON_MISSING_IS_ERROR_BUILTIN`) -- the ADVICE is what this pins, and it
+        has to survive the finding changing severity."""
         findings = Findings()
         manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
         publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
-        assert any("'iconUrl'" in w for w in findings.warnings)
-        assert not any("'iconPath'" in w for w in findings.warnings)
+        assert any("'iconUrl'" in e for e in findings.errors)
+        assert not any("'iconPath'" in e for e in findings.errors)
 
     def test_a_dropped_icon_is_not_told_to_declare_what_it_declared(self):
         """A rejected icon already reports its own cause. Repeating it as "no
@@ -309,6 +312,40 @@ class TestBakesIconRefs:
         publish.bake_entry(authored(), manifest, "a" * 40, findings)
         assert findings.warnings == []
         assert any("no icon declared" in e for e in findings.errors)
+
+    def test_a_builtin_with_no_icon_fails_the_run(self):
+        """A first-party iconless card is not waiting on anyone: the manifest read
+        here is in our own repository and the bytes ship in the client. So it fails
+        the run instead of warning, which is the difference between "fix one line
+        before the document goes out" and what actually happened -- three built-ins
+        rendering placeholders in the live store while their `icon.svg` shipped in
+        every client, diagnosed only in a publish log nobody reads."""
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
+        assert findings.warnings == []
+        assert any("no icon declared" in e for e in findings.errors)
+
+    def test_a_third_party_with_no_icon_still_only_warns(self):
+        """The asymmetry IS the gate, so it is pinned from both sides: erroring on
+        a fetched app would withhold the whole catalog for a defect in a repository
+        we do not control, which is worse than the placeholder it replaces."""
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        publish.bake_entry(authored(), manifest, "a" * 40, findings)
+        assert findings.errors == []
+        assert any("no icon declared" in w for w in findings.warnings)
+
+    def test_the_builtin_gate_is_also_one_switch(self, monkeypatch):
+        """Mirrors the third-party switch: if a built-in ever has to ship iconless
+        (an app whose icon is genuinely still in review), that is one line, not a
+        rewrite of the reporting block."""
+        monkeypatch.setattr(publish, "ICON_MISSING_IS_ERROR_BUILTIN", False)
+        findings = Findings()
+        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        publish.bake_entry(BUILTIN, manifest, "b" * 40, findings)
+        assert findings.errors == []
+        assert any("no icon declared" in w for w in findings.warnings)
 
     def test_an_app_with_an_icon_is_not_warned_about_one(self):
         findings = Findings()
@@ -1540,8 +1577,16 @@ class TestAssetRefRuleMatchesTheSchema:
             BUILTIN, {**MANIFEST, "iconUrl": value}, "b" * 40, findings
         )
         assert "iconRef" not in entry, value
-        assert findings.errors == [], "one odd path must not halt the run"
         assert any("iconUrl" in w for w in findings.warnings)
+        # Refused rather than published is what this class pins. That a BUILT-IN
+        # then fails the run is the first-party icon gate
+        # (`ICON_MISSING_IS_ERROR_BUILTIN`) doing its job on an unpublishable
+        # first-party path; the "one odd path must not halt the release" rule this
+        # line used to assert still holds for a FETCHED app, where the defect is
+        # upstream -- see `test_over_long_fetched_refs_are_refused`.
+        assert findings.errors == [
+            "demo-app: no icon published; the store renders a placeholder"
+        ]
 
     @pytest.mark.parametrize(
         "value",
