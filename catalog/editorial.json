@@ -25,7 +25,11 @@
             "spec-builder",
             "code-review-sage",
             "auto-improvement"
-          ]
+          ],
+          "artwork": {
+            "ref": "art/ship-better-code.png",
+            "alt": "A dashed loop joining a spec document, a review magnifier with a check mark, and a rising metric line"
+          }
         },
         {
           "type": "collection",
@@ -35,7 +39,11 @@
             "auto-research",
             "papyrus",
             "pptx-maker"
-          ]
+          ],
+          "artwork": {
+            "ref": "art/research-to-deliverable.png",
+            "alt": "A research magnifier, a stack of papers, and a presentation easel with a bar chart, joined by arrows"
+          }
         }
       ]
     }
