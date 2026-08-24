@@ -395,6 +395,23 @@
         "name": "Kiro Crew",
         "kind": "org"
       }
+    },
+    {
+      "name": "crew-manager",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/xuejinT/crew-manager-app",
+        "ref": "main"
+      },
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      },
+      "categories": [
+        "productivity",
+        "agents-automation"
+      ],
+      "note": "Cross-session work overview (Needs you / Running / Done) with a private Conductor panel; public repo."
     }
   ],
   "removed": [],
