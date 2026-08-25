@@ -127,6 +127,25 @@
       }
     },
     {
+      "name": "command-bar",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "5e2234e2d6cf210d2ce29729c9bdc91f414897d2",
+          "subdir": "src/kiro_crew/apps/builtins/command_bar"
+        }
+      },
+      "categories": [
+        "productivity"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      },
+      "note": "Replaces the Cmd+K surface, so it declares ui.overlays and no page. Without a row here it is absent from Discover AND from the launcher's own app list, leaving a Library row as its only trace."
+    },
+    {
       "name": "crew-companion",
       "source": {
         "type": "builtin",
