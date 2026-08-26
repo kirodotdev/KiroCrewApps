@@ -431,6 +431,24 @@
         "agents-automation"
       ],
       "note": "Cross-session work overview (Needs you / Running / Done) with a private Conductor panel; public repo."
+    },
+    {
+      "name": "intent-studio",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/xuejinT/intent-studio",
+        "ref": "main"
+      },
+      "author": {
+        "name": "xuejint",
+        "url": "https://github.com/xuejinT",
+        "kind": "person"
+      },
+      "categories": [
+        "productivity",
+        "agents-automation"
+      ],
+      "note": "See and steer the AI's interpretation of a design brief as editable, provenance-tagged decision cards before it builds a mockup; public repo."
     }
   ],
   "removed": [],
