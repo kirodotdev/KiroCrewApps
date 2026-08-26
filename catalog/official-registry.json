@@ -440,9 +440,8 @@
         "ref": "main"
       },
       "author": {
-        "name": "xuejint",
-        "url": "https://github.com/xuejinT",
-        "kind": "person"
+        "name": "Kiro Crew",
+        "kind": "org"
       },
       "categories": [
         "productivity",
