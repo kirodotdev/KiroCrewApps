@@ -79,6 +79,15 @@ agentic review lanes run on same-repo pull requests and read `AUTOSDE.yaml` from
 **base** commit, so a pull request cannot weaken the rules that govern it. A lane
 blocks only by emitting an explicit block marker; anything else it says is advisory.
 
+A third agentic lane runs when a pull request adds or re-pins a **git-type
+catalog entry**: the app-readiness review checks out each affected app
+repository at the pinned ref and judges it against
+`review/app-readiness-rules.md` (also read from the base commit). Blocking
+tiers there mean "this app cannot install or silently degrades as pinned";
+advisory tiers surface reliability and store-metadata gaps for the app's
+author. Fixes for its findings land in the app's own repository, not here —
+re-pin the entry to the fixed ref and the lane re-reviews.
+
 Say in the description what you verified rather than what you intended. For a
 listing, that means you cloned the repository at the ref you wrote down and looked
 at the manifest the store will bake its copy from.
