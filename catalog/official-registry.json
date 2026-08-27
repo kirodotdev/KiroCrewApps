@@ -448,6 +448,23 @@
         "agents-automation"
       ],
       "note": "See and steer the AI's interpretation of a design brief as editable, provenance-tagged decision cards before it builds a mockup; public repo."
+    },
+    {
+      "name": "endless-worlds",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/buluoray/KiroCrewApp-Endless-Worlds",
+        "ref": "main"
+      },
+      "author": {
+        "name": "buluoray",
+        "url": "https://github.com/buluoray",
+        "kind": "person"
+      },
+      "categories": [
+        "other"
+      ],
+      "note": "AI-narrated life simulator; public repo, individual author. Ships three app agents plus an MCP server, and its onInstall step installs optional art dependencies."
     }
   ],
   "removed": [],
