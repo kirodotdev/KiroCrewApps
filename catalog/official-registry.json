@@ -437,7 +437,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/xuejinT/intent-studio",
-        "ref": "main"
+        "ref": "aea4ef9e95c031450ee471b637e8f2dcc9f6fe15"
       },
       "author": {
         "name": "Kiro Crew",
