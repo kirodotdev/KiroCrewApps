@@ -433,23 +433,6 @@
       "note": "Cross-session work overview (Needs you / Running / Done) with a private Conductor panel; public repo."
     },
     {
-      "name": "intent-studio",
-      "source": {
-        "type": "git",
-        "url": "https://github.com/xuejinT/intent-studio",
-        "ref": "aea4ef9e95c031450ee471b637e8f2dcc9f6fe15"
-      },
-      "author": {
-        "name": "Kiro Crew",
-        "kind": "org"
-      },
-      "categories": [
-        "productivity",
-        "agents-automation"
-      ],
-      "note": "See and steer the AI's interpretation of a design brief as editable, provenance-tagged decision cards before it builds a mockup; public repo."
-    },
-    {
       "name": "endless-worlds",
       "source": {
         "type": "git",
