@@ -525,13 +525,22 @@ def bake_asset_ref_list(
         )
         return []
     refs: list[str] = []
-    for index, item in enumerate(value):
-        if len(refs) >= limit:
-            findings.warn(
-                f"{app}: {key} declares {len(value)} entries, over the {limit} the "
-                f"catalog publishes; the rest are not published"
-            )
-            break
+    # Bound the SCAN, not only what survives it. Capping accepted entries alone
+    # left the loop unbounded on hostile input: `len(refs) >= limit` can only fire
+    # once something has been ACCEPTED, so a list whose every element is invalid
+    # never reaches the cap, runs to the end, and formats one warning per element
+    # -- a million declared entries meant a million retained diagnostic strings.
+    # The bound belongs on the read.
+    #
+    # Reading the first `limit` is not a lossy shortcut: they are the only ones
+    # that could ever be published, so an entry past them was never going to be
+    # shown whether it was valid or not.
+    if len(value) > limit:
+        findings.warn(
+            f"{app}: {key} declares {len(value)} entries, over the {limit} the "
+            f"catalog publishes; only the first {limit} are read"
+        )
+    for index, item in enumerate(value[:limit]):
         where = f"{key}[{index}]"
         if not isinstance(item, str) or not item.strip():
             findings.warn(

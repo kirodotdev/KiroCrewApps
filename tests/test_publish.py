@@ -1840,6 +1840,29 @@ class TestBakeEntryHostsScreenshots:
         assert len(entry["screenshotRefs"]) == limit
         assert any("over the" in w for w in findings.warnings)
 
+    def test_the_cap_bounds_the_SCAN_not_only_what_survives_it(self):
+        """The bound has to hold when NOTHING is accepted. Capping accepted entries
+        alone left the loop running to the end of a hostile list and formatting one
+        warning per element, so a million declared entries meant a million retained
+        strings -- the cap could not fire, because nothing was ever accepted."""
+        limit = publish.SCREENSHOT_MAX_COUNT
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            # Every element invalid, so `refs` never grows.
+            hero_manifest(screenshots=[{} for _ in range(5000)]),
+            "a" * 40,
+            findings,
+        )
+        assert "screenshotRefs" not in entry
+        # Count only the diagnostics THIS field produced: the fixture declares no
+        # icon, so an unfiltered count folds in an unrelated warning and stops
+        # discriminating. One per element READ plus the one over-limit notice --
+        # bounded by the cap, not by how long the manifest is.
+        mine = [w for w in findings.warnings if "screenshots[" in w or "screenshots " in w]
+        assert len(mine) <= limit + 1, mine[:3]
+        assert any("only the first" in w for w in findings.warnings)
+
     def test_duplicate_declarations_collapse(self):
         """So the count against the cap is a count of distinct pictures."""
         findings = Findings()
