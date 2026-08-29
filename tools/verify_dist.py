@@ -156,19 +156,42 @@ def verify_dir(dist: Path, keys: dict[str, bytes] | None = None) -> list[str]:
 
         print(f"verified {doc.name} ({len(payload)} bytes, {algorithm}, key {key_id})")
 
-    problems.extend(verify_hosted_icons(dist))
+    problems.extend(verify_hosted_entry_images(dist))
     problems.extend(verify_hosted_artwork(dist))
     return problems
 
 
-def verify_hosted_icons(dist: Path) -> list[str]:
-    """Check every hosted icon against the digest in its own filename.
+#: Which hosted directory each entry image field must be published under.
+#:
+#: Hardcoded rather than imported from `tools/publish.py` ON PURPOSE: this file
+#: verifies the OUTPUT independently of the tool that produced it, so importing
+#: the producer's constants would let a bug in the producer define what correct
+#: means. It must stay in step with `ICON_ASSET_DIR` and `HERO_ASSET_DIR` there,
+#: the same coupling `.github/scripts/upload-assets.sh` keeps with
+#: `ICON_EXT_ALLOWED`.
+_ENTRY_ASSET_DIRS = {
+    "iconRef": "assets/icons/",
+    "iconRefDark": "assets/icons/",
+    "heroRef": "assets/heroes/",
+    "heroDetailRef": "assets/hero-details/",
+}
 
-    Icons carry no signature of their own. Their integrity rides on being
-    content-addressed: the filename IS the sha256 of the bytes, and the filename
-    appears in the registry document, which is signed and verified above. So the
-    chain is signature -> document -> path -> bytes, and this closes the last
-    link for the artifacts we are about to upload.
+#: List-valued entry image fields, checked element by element. Kept separate from
+#: the scalar table rather than folded in with an isinstance probe, so a field
+#: whose TYPE the publisher got wrong cannot quietly land in the wrong branch.
+_ENTRY_ASSET_LIST_DIRS = {
+    "screenshotRefs": "assets/screenshots/",
+}
+
+
+def verify_hosted_entry_images(dist: Path) -> list[str]:
+    """Check every hosted entry image against the digest in its own filename.
+
+    Icons and hero images carry no signature of their own. Their integrity rides
+    on being content-addressed: the filename IS the sha256 of the bytes, and the
+    filename appears in the registry document, which is signed and verified
+    above. So the chain is signature -> document -> path -> bytes, and this closes
+    the last link for the artifacts we are about to upload.
 
     It is also the reference implementation of what a CLIENT must do after
     downloading an icon. Publishing a document that names a digest and then
@@ -189,29 +212,65 @@ def verify_hosted_icons(dist: Path) -> list[str]:
     for entry in doc.get("apps") or []:
         if not isinstance(entry, dict):
             continue
-        for field in ("iconRef", "iconRefDark"):
-            ref = entry.get(field)
-            # An absolute ref is a builtin's client-local path: those bytes ship
-            # with the client, so there is nothing here to check.
-            if not isinstance(ref, str) or not ref or ref.startswith("/"):
+        name = entry.get("name")
+        for field, hosted_dir in _ENTRY_ASSET_DIRS.items():
+            found, trouble = _check_hosted_ref(
+                dist, entry.get(field), hosted_dir, f"{name}: {field}"
+            )
+            checked += found
+            problems.extend(trouble)
+        for field, hosted_dir in _ENTRY_ASSET_LIST_DIRS.items():
+            refs = entry.get(field)
+            if refs is None:
                 continue
-            path = dist / ref
-            if not path.is_file():
+            if not isinstance(refs, list):
                 problems.append(
-                    f"{entry.get('name')}: {field} names {ref!r}, which is not in {dist}"
+                    f"{name}: {field} is {type(refs).__name__}, not a list"
                 )
                 continue
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
-            if actual != path.stem:
-                problems.append(
-                    f"{entry.get('name')}: {field} {ref!r} is addressed by digest "
-                    f"{path.stem!r} but its bytes hash to {actual!r}"
+            for index, ref in enumerate(refs):
+                found, trouble = _check_hosted_ref(
+                    dist, ref, hosted_dir, f"{name}: {field}[{index}]"
                 )
-                continue
-            checked += 1
+                checked += found
+                problems.extend(trouble)
     if checked:
-        print(f"verified {checked} hosted icon(s) against their content digests")
+        print(f"verified {checked} hosted entry image(s) against their content digests")
     return problems
+
+
+def _check_hosted_ref(
+    dist: Path, ref: object, hosted_dir: str, where: str
+) -> tuple[int, list[str]]:
+    """Check one published ref: hosted path -> file present -> bytes match digest.
+
+    Returns how many refs were actually verified (0 or 1) and any problems, so a
+    caller can report coverage without counting the skips. An absent field and an
+    absolute ref both verify nothing and are not problems: an absolute ref is a
+    builtin's client-local path, whose bytes ship with the client.
+    """
+    if not isinstance(ref, str) or not ref or ref.startswith("/"):
+        return 0, []
+    # A published relative ref MUST be the content-addressed form. An authored
+    # repo path that reached the output means the ingest step did not run, and
+    # such a ref resolves against the CATALOG root onto a file only the app's
+    # repository has -- so it cannot load, and nothing downstream would have said
+    # why. Same rule `verify_hosted_artwork` already applies to editorial images.
+    if not ref.startswith(hosted_dir):
+        return 0, [
+            f"{where} names {ref!r}, which is not a hosted asset path under "
+            f"{hosted_dir!r} -- the ingest step did not run"
+        ]
+    path = dist / ref
+    if not path.is_file():
+        return 0, [f"{where} names {ref!r}, which is not in {dist}"]
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != path.stem:
+        return 0, [
+            f"{where} {ref!r} is addressed by digest {path.stem!r} but its bytes "
+            f"hash to {actual!r}"
+        ]
+    return 1, []
 
 
 def verify_hosted_artwork(dist: Path) -> list[str]:

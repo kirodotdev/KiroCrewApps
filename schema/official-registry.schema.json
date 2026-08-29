@@ -109,7 +109,31 @@
           "maxLength": 512,
           "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
         },
-        "heroRef": { "type": "string" }
+        "heroRef": {
+          "description": "Path to the app's wide store hero, never a URL. Same shape rules as iconRef, and for the same reason: this document is signed, so it may not name a host a publisher chose. A builtin names an absolute client-local path whose bytes it already ships; every other source's hero is INGESTED at publish time and this is a catalog-relative content-addressed path (assets/heroes/<sha256>.<ext>). An un-ingested repo-relative value would resolve against the catalog root onto a file only the app's repository has, so it could never load.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+        },
+        "heroDetailRef": {
+          "description": "Path to the wide banner on the app's detail page, never a URL. Same shape rules as heroRef; a fetched app's is INGESTED to assets/hero-details/<sha256>.<ext>. Separate directory from heroRef because the two are different crops of different aspect (25:6 against 16:9), so one is not a substitute for the other.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+        },
+        "screenshotRefs": {
+          "description": "The app's store screenshots in the order the detail page shows them, each a path and never a URL. Same shape rules as iconRef per element; a fetched app's are INGESTED to assets/screenshots/<sha256>.<ext>. Capped because each entry is a blob read at publish time and a hosted file forever, so an uncapped list would let one manifest set the cost of everyone's release. A bad element is dropped on its own, so a short array does not mean the app declared a short one.",
+          "type": "array",
+          "maxItems": 8,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512,
+            "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+          }
+        }
       }
     },
 

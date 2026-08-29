@@ -105,6 +105,43 @@ MANIFEST = {
 # --------------------------------------------------------------------------
 
 
+class TestGitTimeoutsDoNotEndTheRun:
+    """A git timeout must arrive as a `PublishError`, not a bare `TimeoutExpired`.
+
+    Raised bare it is not a `PublishError`, so it escapes the per-image handler in
+    the ingest path, escapes `build_registry`, and escapes `publish`'s own
+    handler -- one slow or hostile repository would end every other app's release
+    with a traceback, which is the opposite of the warn-and-continue contract
+    every rejection in the ingest path documents.
+
+    Converted inside the two git helpers rather than at the ingest call sites,
+    because `run_git` has seven callers and patching only the ingest ones leaves
+    ls-remote, fetch, clone and rev-parse able to do exactly that.
+    """
+
+    @pytest.mark.parametrize("helper", ["run_git", "run_git_bytes"])
+    def test_a_timeout_becomes_a_publish_error(self, helper, monkeypatch):
+        def times_out(*a, **kw):
+            raise subprocess.TimeoutExpired(cmd=["git"], timeout=publish.GIT_TIMEOUT)
+
+        monkeypatch.setattr(subprocess, "run", times_out)
+        with pytest.raises(publish.PublishError, match="timed out"):
+            getattr(publish, helper)(["show", "HEAD:x"])
+
+    def test_an_ingest_timeout_degrades_to_a_warning(self, monkeypatch):
+        """The contract: one repository's timeout costs one card its picture."""
+
+        def times_out(*a, **kw):
+            raise subprocess.TimeoutExpired(cmd=["git"], timeout=publish.GIT_TIMEOUT)
+
+        monkeypatch.setattr(subprocess, "run", times_out)
+        assets = publish.IconAssets(publish.fetch_blob, publish.blob_size)
+        findings = Findings()
+        assert assets.add("https://x/y.git", "a" * 40, "i.png", "demo", findings) is None
+        assert findings.errors == []
+        assert any("timed out" in w for w in findings.warnings)
+
+
 def test_resolves_branch_to_commit(tmp_path, allow_local_urls):
     repo = tmp_path / "repo"
     commit = make_repo(repo, MANIFEST)
@@ -214,11 +251,16 @@ def test_bakes_generated_fields():
     # may do. This entry is a git source, so the icon is read from `iconPath`
     # (absent here) -- and because the publisher clearly meant to ship an icon,
     # the run says which key this source type reads instead of going quiet.
-    # `heroRef` still reads `heroImage` unconditionally: that field has not been
-    # through this treatment yet.
+    # `heroImage` is absolute for the same reason and is now held to the same
+    # rule: a fetched manifest may not name an absolute location, so the hero is
+    # DROPPED with its own diagnostic rather than published. It used to be copied
+    # through unchecked, into a document we sign.
     assert "iconRef" not in entry
     assert any("reads iconPath" in w for w in findings.warnings)
-    assert entry["heroRef"] == "/app-assets/demo-app/hero.svg"
+    assert "heroRef" not in entry
+    assert any(
+        "heroImage" in w and "not a repo-relative path" in w for w in findings.warnings
+    )
 
 
 class TestBakesIconRefs:
@@ -248,6 +290,10 @@ class TestBakesIconRefs:
         findings = Findings()
         manifest = {**MANIFEST, "iconPath": "assets/icon.png"}
         del manifest["iconUrl"]
+        # MANIFEST's `heroImage` is absolute, which a git source may not name, so
+        # leaving it in would add a hero diagnostic to a test about icons and make
+        # the empty-warnings assertion below fail for an unrelated reason.
+        del manifest["heroImage"]
         entry = publish.bake_entry(authored(), manifest, "a" * 40, findings)
         assert entry["iconRef"] == "assets/icon.png"
         assert findings.warnings == []
@@ -308,7 +354,11 @@ class TestBakesIconRefs:
         flipping it later needs no other change."""
         monkeypatch.setattr(publish, "ICON_MISSING_IS_ERROR", True)
         findings = Findings()
-        manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+        # `heroImage` out with `iconUrl`: it is absolute, which a git source may
+        # not name, and its diagnostic would break the icon-only assertion below.
+        manifest = {
+            k: v for k, v in MANIFEST.items() if k not in ("iconUrl", "heroImage")
+        }
         publish.bake_entry(authored(), manifest, "a" * 40, findings)
         assert findings.warnings == []
         assert any("no icon declared" in e for e in findings.errors)
@@ -1470,6 +1520,402 @@ class TestBakeEntryHostsFetchedIcons:
         assert len(assets.files) == 2
 
 
+def hero_manifest(**over):
+    """A git-source manifest naming a repo-relative hero and no absolute keys."""
+    manifest = {k: v for k, v in MANIFEST.items() if k != "iconUrl"}
+    manifest["heroImage"] = "assets/hero.png"
+    manifest.update(over)
+    return manifest
+
+
+class TestHeroIngestion:
+    """A hero is ingested exactly like an icon, under the WIDE-ART policy.
+
+    Same source (a blob in a repo we do not control) and same content-addressed
+    naming, but a 16:9 banner is not a 512px tile: it gets the `ART_*` ceiling,
+    because the icon ceiling rejects an ordinary hero, and it gets no squareness
+    advice, because that would fire on every correct one.
+    """
+
+    def test_a_hero_becomes_a_content_addressed_path(self):
+        data = png_bytes(1600, 900)
+        heroes = publish.HeroAssets(reader_for({"assets/hero.png": data}))
+        findings = Findings()
+        ref = heroes.add("https://x/y.git", "a" * 40, "assets/hero.png", "demo", findings)
+        assert ref == f"assets/heroes/{hashlib.sha256(data).hexdigest()}.png"
+        assert heroes.files[ref] == data
+        assert findings.warnings == []
+
+    def test_heroes_land_in_their_own_directory(self):
+        """Identical bytes published as both kinds must not collide. A shared pool
+        would make `assets/icons/` a lie and defeat listing either kind alone."""
+        data = png_bytes(512, 512)
+        icon_ref = publish.IconAssets(reader_for({"i.png": data})).add(
+            "https://x/y.git", "a" * 40, "i.png", "demo", Findings()
+        )
+        hero_ref = publish.HeroAssets(reader_for({"i.png": data})).add(
+            "https://x/y.git", "a" * 40, "i.png", "demo", Findings()
+        )
+        assert icon_ref is not None and hero_ref is not None
+        assert icon_ref.startswith("assets/icons/")
+        assert hero_ref.startswith("assets/heroes/")
+        assert Path(icon_ref).name == Path(hero_ref).name
+
+    def test_refuses_an_svg_hero(self):
+        """The live catalog shipped one: an SVG is a document, not pixels, and we
+        serve what we host from our OWN origin. Raster only, same as icons."""
+        heroes = publish.HeroAssets(reader_for({"h.svg": b"<svg/>"}))
+        findings = Findings()
+        assert heroes.add("https://x/y.git", "a" * 40, "h.svg", "demo", findings) is None
+        assert heroes.files == {}
+        assert any("does not host" in w for w in findings.warnings)
+
+    def test_takes_the_wide_art_ceiling_not_the_icon_one(self):
+        """A hero between the two limits must publish. Reusing `IconAssets` would
+        have refused an ordinary banner for being over a 512px tile's budget."""
+        assert publish.ICON_MAX_BYTES < publish.ART_MAX_BYTES
+        data = png_bytes(1600, 900, b"\x00" * (publish.ICON_MAX_BYTES + 1))
+        assert publish.ICON_MAX_BYTES < len(data) <= publish.ART_MAX_BYTES
+        heroes = publish.HeroAssets(reader_for({"h.png": data}))
+        findings = Findings()
+        assert heroes.add("https://x/y.git", "a" * 40, "h.png", "demo", findings) is not None
+        assert findings.warnings == []
+
+    def test_refuses_a_hero_over_the_wide_art_ceiling(self):
+        big = png_bytes(1600, 900, b"\x00" * (publish.ART_MAX_BYTES + 1))
+        heroes = publish.HeroAssets(reader_for({"h.png": big}))
+        findings = Findings()
+        assert heroes.add("https://x/y.git", "a" * 40, "h.png", "demo", findings) is None
+        assert any("over the" in w for w in findings.warnings)
+
+    def test_an_off_aspect_hero_is_advised_but_still_published(self):
+        """A crop is a curation nit; only type and bytes may withhold an image."""
+        heroes = publish.HeroAssets(reader_for({"h.png": png_bytes(900, 900)}))
+        findings = Findings()
+        ref = heroes.add("https://x/y.git", "a" * 40, "h.png", "demo", findings)
+        assert ref is not None
+        assert any("16:9" in w for w in findings.warnings)
+
+    def test_a_square_hero_is_not_judged_by_the_icon_rules(self):
+        """`IconAssets` would call 1600x900 "not square". Wrong advice for a hero."""
+        heroes = publish.HeroAssets(reader_for({"h.png": png_bytes(1600, 900)}))
+        findings = Findings()
+        heroes.add("https://x/y.git", "a" * 40, "h.png", "demo", findings)
+        assert not any("square" in w for w in findings.warnings)
+
+
+class TestBakeEntryHostsFetchedHeroes:
+    """`heroRef` goes through validate-then-ingest, which it did not before.
+
+    It used to be a bare `manifest_str(manifest, "heroImage")` copied straight
+    into a document we SIGN -- unscreened, un-ingested, and with no `pattern` on
+    the field in the published schema to catch it downstream either.
+    """
+
+    def test_a_fetched_hero_becomes_a_hosted_path(self):
+        """The defect this closes. Published repo-relative, a hero resolved
+        against the CATALOG root onto a file only the app's repo had, so every
+        third-party hero was a guaranteed miss on a plausible-looking path."""
+        data = png_bytes(1600, 900)
+        heroes = publish.HeroAssets(reader_for({"assets/hero.png": data}))
+        entry = publish.bake_entry(
+            authored(), hero_manifest(), "a" * 40, Findings(), None, heroes
+        )
+        assert entry["heroRef"] == f"assets/heroes/{hashlib.sha256(data).hexdigest()}.png"
+        assert heroes.files
+
+    def test_a_builtin_hero_is_published_as_is(self):
+        """Absolute is correct for a builtin, and the client ships those bytes."""
+        heroes = publish.HeroAssets(reader_for({}))
+        entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings(), None, heroes)
+        assert entry["heroRef"] == "/app-assets/demo-app/hero.svg"
+        assert heroes.files == {}
+
+    def test_a_git_source_may_not_name_an_absolute_hero(self):
+        """The rule icons already had: honouring an absolute value from a manifest
+        we do not control would let a publisher put a host of their choosing into
+        a document we sign."""
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(heroImage="/app-assets/demo-app/hero.svg"),
+            "a" * 40,
+            findings,
+        )
+        assert "heroRef" not in entry
+        assert any("not a repo-relative path" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://evil.example/pixel.png",
+            "//evil.example/pixel.png",
+            "javascript:alert(1)",
+            "data:image/svg+xml,<svg/>",
+            "../../etc/passwd",
+            "assets/../../secret.png",
+        ],
+    )
+    def test_a_hero_that_is_not_a_path_is_dropped(self, value):
+        """Every one of these used to reach the signed document verbatim."""
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(), hero_manifest(heroImage=value), "a" * 40, findings
+        )
+        assert "heroRef" not in entry
+        assert findings.warnings
+
+    def test_a_refused_hero_leaves_the_field_off_the_entry(self):
+        """Dropped, NOT left repo-relative. Keeping the authored path would
+        publish a ref that cannot load; no hero is just a card with no banner."""
+        heroes = publish.HeroAssets(reader_for({}))
+        entry = publish.bake_entry(
+            authored(), hero_manifest(), "a" * 40, Findings(), None, heroes
+        )
+        assert "heroRef" not in entry
+
+    def test_an_over_long_hero_ref_is_dropped(self):
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(heroImage="a/" + "b" * publish.ASSET_REF_MAX + ".png"),
+            "a" * 40,
+            findings,
+        )
+        assert "heroRef" not in entry
+        assert any("not a publishable path" in w for w in findings.warnings)
+
+
+class TestBakeEntryHostsDetailHeroes:
+    """`heroDetailRef` was published by NOTHING before, so an app's detail banner
+    could never reach the store however correctly its manifest declared one."""
+
+    def test_a_detail_hero_becomes_a_hosted_path(self):
+        data = png_bytes(2500, 600)
+        details = publish.HeroDetailAssets(reader_for({"assets/detail.png": data}))
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(heroImageDetail="assets/detail.png"),
+            "a" * 40,
+            Findings(),
+            None,
+            None,
+            details,
+        )
+        digest = hashlib.sha256(data).hexdigest()
+        assert entry["heroDetailRef"] == f"assets/hero-details/{digest}.png"
+
+    def test_the_detail_hero_is_judged_at_25_by_6(self):
+        """Not 16:9. The two are different crops, so the hero's advice would be
+        wrong here and would fire on every correct detail banner."""
+        details = publish.HeroDetailAssets(reader_for({"d.png": png_bytes(2500, 600)}))
+        findings = Findings()
+        details.add("https://x/y.git", "a" * 40, "d.png", "demo", findings)
+        assert findings.warnings == []
+
+        off = publish.HeroDetailAssets(reader_for({"d.png": png_bytes(1600, 900)}))
+        findings = Findings()
+        off.add("https://x/y.git", "a" * 40, "d.png", "demo", findings)
+        assert any("25:6" in w for w in findings.warnings)
+
+    def test_a_detail_hero_does_not_share_the_hero_directory(self):
+        """Different aspect, so one is not a substitute for the other and a shared
+        pool would make either directory's name a lie."""
+        data = png_bytes(1600, 900)
+        hero = publish.HeroAssets(reader_for({"x.png": data})).add(
+            "https://x/y.git", "a" * 40, "x.png", "demo", Findings()
+        )
+        detail = publish.HeroDetailAssets(reader_for({"x.png": data})).add(
+            "https://x/y.git", "a" * 40, "x.png", "demo", Findings()
+        )
+        assert hero is not None and detail is not None
+        assert hero.startswith("assets/heroes/")
+        assert detail.startswith("assets/hero-details/")
+
+
+class TestBakeEntryHostsScreenshots:
+    """`screenshotRefs` was published by nothing either, and it is the one field
+    whose declared TYPE is a list -- which is where an untrusted manifest bites.
+    """
+
+    def shots_for(self, files):
+        return publish.ScreenshotAssets(reader_for(files))
+
+    def test_screenshots_become_hosted_paths_in_order(self):
+        one, two = png_bytes(1200, 800, b"\x01" * 32), png_bytes(1200, 800, b"\x02" * 32)
+        shots = self.shots_for({"a.png": one, "b.png": two})
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(screenshots=["a.png", "b.png"]),
+            "a" * 40,
+            Findings(),
+            None,
+            None,
+            None,
+            shots,
+        )
+        assert entry["screenshotRefs"] == [
+            f"assets/screenshots/{hashlib.sha256(one).hexdigest()}.png",
+            f"assets/screenshots/{hashlib.sha256(two).hexdigest()}.png",
+        ], "the detail page shows them in the order the manifest declared"
+
+    def test_a_screenshot_has_no_aspect_advice(self):
+        """A screenshot is whatever shape the app's window is; the store scrolls
+        them rather than seating them in a fixed frame."""
+        shots = self.shots_for({"s.png": png_bytes(700, 1500)})
+        findings = Findings()
+        assert shots.add("https://x/y.git", "a" * 40, "s.png", "demo", findings)
+        assert findings.warnings == []
+
+    @pytest.mark.parametrize("value", [{}, "one.png", 7, True])
+    def test_a_screenshots_field_that_is_not_a_list_is_refused(self, value):
+        """Every one of these used to be impossible to publish at all; now the
+        container's TYPE is checked before it is iterated. A bare string matters
+        most: Python would iterate it per CHARACTER and publish an app's gallery
+        as the letters of a filename."""
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(), hero_manifest(screenshots=value), "a" * 40, findings
+        )
+        assert "screenshotRefs" not in entry
+        assert any("not a list" in w for w in findings.warnings)
+
+    @pytest.mark.parametrize("bad", [{}, None, 7, "", "   ", []])
+    def test_one_unusable_element_does_not_take_the_others(self, bad):
+        """A naive `for s in value: s.startswith(...)` raises on a dict or an int
+        and ends the whole publish over an optional field."""
+        data = png_bytes(1200, 800)
+        shots = self.shots_for({"ok.png": data})
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(screenshots=[bad, "ok.png"]),
+            "a" * 40,
+            findings,
+            None,
+            None,
+            None,
+            shots,
+        )
+        assert entry["screenshotRefs"] == [
+            f"assets/screenshots/{hashlib.sha256(data).hexdigest()}.png"
+        ]
+        assert findings.warnings
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "https://evil.example/shot.png",
+            "//evil.example/shot.png",
+            "javascript:alert(1)",
+            "../../etc/passwd",
+            "/app-assets/demo-app/shot.png",
+        ],
+    )
+    def test_an_element_that_is_not_a_repo_relative_path_is_dropped(self, value):
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(), hero_manifest(screenshots=[value]), "a" * 40, findings
+        )
+        assert "screenshotRefs" not in entry
+        assert findings.warnings
+
+    def test_the_count_is_capped(self):
+        """Each entry is a blob read now and a hosted file forever, so an uncapped
+        list lets one manifest set the cost of everyone's release."""
+        limit = publish.SCREENSHOT_MAX_COUNT
+        names = [f"s{i}.png" for i in range(limit + 4)]
+        files = {n: png_bytes(1200, 800, bytes([i % 251]) * 32) for i, n in enumerate(names)}
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(screenshots=names),
+            "a" * 40,
+            findings,
+            None,
+            None,
+            None,
+            self.shots_for(files),
+        )
+        assert len(entry["screenshotRefs"]) == limit
+        assert any("over the" in w for w in findings.warnings)
+
+    def test_the_cap_bounds_the_SCAN_not_only_what_survives_it(self):
+        """The bound has to hold when NOTHING is accepted. Capping accepted entries
+        alone left the loop running to the end of a hostile list and formatting one
+        warning per element, so a million declared entries meant a million retained
+        strings -- the cap could not fire, because nothing was ever accepted."""
+        limit = publish.SCREENSHOT_MAX_COUNT
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            # Every element invalid, so `refs` never grows.
+            hero_manifest(screenshots=[{} for _ in range(5000)]),
+            "a" * 40,
+            findings,
+        )
+        assert "screenshotRefs" not in entry
+        # Count only the diagnostics THIS field produced: the fixture declares no
+        # icon, so an unfiltered count folds in an unrelated warning and stops
+        # discriminating. One per element READ plus the one over-limit notice --
+        # bounded by the cap, not by how long the manifest is.
+        mine = [w for w in findings.warnings if "screenshots[" in w or "screenshots " in w]
+        assert len(mine) <= limit + 1, mine[:3]
+        assert any("only the first" in w for w in findings.warnings)
+
+    def test_duplicate_declarations_collapse(self):
+        """So the count against the cap is a count of distinct pictures."""
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(screenshots=["a.png", "a.png", "a.png"]),
+            "a" * 40,
+            findings,
+            None,
+            None,
+            None,
+            self.shots_for({"a.png": png_bytes(1200, 800)}),
+        )
+        assert len(entry["screenshotRefs"]) == 1
+
+    def test_no_surviving_screenshot_leaves_the_field_off(self):
+        """Not an empty array: absent and empty read the same to a client, and the
+        absent one is honest about there being no gallery."""
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(screenshots=["gone.png"]),
+            "a" * 40,
+            Findings(),
+            None,
+            None,
+            None,
+            self.shots_for({}),
+        )
+        assert "screenshotRefs" not in entry
+
+    def test_an_svg_screenshot_is_refused(self):
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(),
+            hero_manifest(screenshots=["s.svg"]),
+            "a" * 40,
+            findings,
+            None,
+            None,
+            None,
+            self.shots_for({"s.svg": b"<svg/>"}),
+        )
+        assert "screenshotRefs" not in entry
+        assert any("does not host" in w for w in findings.warnings)
+
+    def test_screenshots_do_not_share_a_directory_with_the_heroes(self):
+        data = png_bytes(1200, 800)
+        shot = self.shots_for({"x.png": data}).add(
+            "https://x/y.git", "a" * 40, "x.png", "demo", Findings()
+        )
+        assert shot is not None and shot.startswith("assets/screenshots/")
+
+
 # ---------------------------------------------------------------------------
 # verify_dist closes the last link of the integrity chain
 # ---------------------------------------------------------------------------
@@ -1494,49 +1940,185 @@ def dist_with_icon(tmp_path, ref: str, data: bytes, on_disk: bytes | None = None
 
 
 def test_verify_dist_accepts_a_matching_icon_digest(tmp_path):
-    from verify_dist import verify_hosted_icons
+    from verify_dist import verify_hosted_entry_images
 
     data = b"\x89PNG\r\n\x1a\nwhatever"
     ref = f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
-    assert verify_hosted_icons(dist_with_icon(tmp_path, ref, data, data)) == []
+    assert verify_hosted_entry_images(dist_with_icon(tmp_path, ref, data, data)) == []
 
 
 def test_verify_dist_catches_bytes_that_do_not_match_their_digest(tmp_path):
     """The case the whole scheme exists to catch: a document naming one digest
     while the served bytes are something else. Undetectable to a client that
     skips this check, which is why it is code and not a sentence in the schema."""
-    from verify_dist import verify_hosted_icons
+    from verify_dist import verify_hosted_entry_images
 
     honest = b"\x89PNG\r\n\x1a\nhonest"
     ref = f"assets/icons/{hashlib.sha256(honest).hexdigest()}.png"
-    problems = verify_hosted_icons(dist_with_icon(tmp_path, ref, honest, b"swapped"))
+    problems = verify_hosted_entry_images(dist_with_icon(tmp_path, ref, honest, b"swapped"))
     assert len(problems) == 1
     assert "bytes hash to" in problems[0]
 
 
 def test_verify_dist_catches_a_missing_icon(tmp_path):
-    from verify_dist import verify_hosted_icons
+    from verify_dist import verify_hosted_entry_images
 
     data = b"\x89PNG\r\n\x1a\ngone"
     ref = f"assets/icons/{hashlib.sha256(data).hexdigest()}.png"
-    problems = verify_hosted_icons(dist_with_icon(tmp_path, ref, data, None))
+    problems = verify_hosted_entry_images(dist_with_icon(tmp_path, ref, data, None))
     assert len(problems) == 1
     assert "is not in" in problems[0]
 
 
 def test_verify_dist_ignores_a_builtin_client_local_ref(tmp_path):
     """Those bytes ship with the client, so there is nothing in dist to check."""
-    from verify_dist import verify_hosted_icons
+    from verify_dist import verify_hosted_entry_images
 
     dist = dist_with_icon(tmp_path, "/app-assets/demo-app/icon.svg", b"", None)
-    assert verify_hosted_icons(dist) == []
+    assert verify_hosted_entry_images(dist) == []
 
 
 def test_verify_dist_is_quiet_when_there_is_no_registry(tmp_path):
-    from verify_dist import verify_hosted_icons
+    from verify_dist import verify_hosted_entry_images
 
     (tmp_path / "empty").mkdir()
-    assert verify_hosted_icons(tmp_path / "empty") == []
+    assert verify_hosted_entry_images(tmp_path / "empty") == []
+
+
+def dist_with_hero(tmp_path, ref: str, on_disk: bytes | None = None):
+    """A dist dir holding one entry whose `heroRef` is *ref*."""
+    dist = tmp_path / "dist"
+    (dist / "assets" / "heroes").mkdir(parents=True)
+    (dist / "official-registry.json").write_text(
+        json.dumps({"schemaVersion": 1, "apps": [{"name": "demo-app", "heroRef": ref}]})
+    )
+    if on_disk is not None:
+        (dist / ref).write_bytes(on_disk)
+    return dist
+
+
+def test_verify_dist_checks_a_hero_digest_too(tmp_path):
+    """A hero's integrity story is the icon's, so it gets the icon's check. It was
+    outside this pass entirely while the field went un-ingested."""
+    from verify_dist import verify_hosted_entry_images
+
+    data = b"\x89PNG\r\n\x1a\nhero"
+    ref = f"assets/heroes/{hashlib.sha256(data).hexdigest()}.png"
+    assert verify_hosted_entry_images(dist_with_hero(tmp_path, ref, data)) == []
+    problems = verify_hosted_entry_images(dist_with_hero(tmp_path / "b", ref, b"swapped"))
+    assert len(problems) == 1 and "bytes hash to" in problems[0]
+
+
+def test_verify_dist_catches_a_hero_the_ingest_step_skipped(tmp_path):
+    """A repo-relative ref in the OUTPUT means the bake ran without an ingester.
+    Such a ref resolves against the catalog root onto a file only the app's
+    repository has, so it can never load -- exactly what shipped, and nothing
+    downstream said so. Same rule the editorial pass already applies."""
+    from verify_dist import verify_hosted_entry_images
+
+    problems = verify_hosted_entry_images(dist_with_hero(tmp_path, "assets/hero.webp"))
+    assert len(problems) == 1
+    assert "the ingest step did not run" in problems[0]
+
+
+def test_verify_dist_catches_an_icon_the_ingest_step_skipped(tmp_path):
+    """The same hole existed for icons: a non-hosted relative ref was skipped
+    silently rather than reported."""
+    from verify_dist import verify_hosted_entry_images
+
+    problems = verify_hosted_entry_images(dist_with_icon(tmp_path, "assets/icon.png", b""))
+    assert len(problems) == 1
+    assert "the ingest step did not run" in problems[0]
+
+
+def dist_with_detail_hero(tmp_path, ref: str, on_disk: bytes | None = None):
+    """A dist dir holding one entry whose `heroDetailRef` is *ref*."""
+    dist = tmp_path / "dist"
+    (dist / "assets" / "hero-details").mkdir(parents=True)
+    (dist / "official-registry.json").write_text(
+        json.dumps(
+            {"schemaVersion": 1, "apps": [{"name": "demo-app", "heroDetailRef": ref}]}
+        )
+    )
+    if on_disk is not None:
+        (dist / ref).write_bytes(on_disk)
+    return dist
+
+
+def test_verify_dist_checks_the_detail_hero_digest(tmp_path):
+    """Its own field and its own directory, so it needs its own row in the table --
+    a hero that is verified says nothing about a detail hero that is not."""
+    from verify_dist import verify_hosted_entry_images
+
+    data = b"\x89PNGdetail"
+    ref = f"assets/hero-details/{hashlib.sha256(data).hexdigest()}.png"
+    assert verify_hosted_entry_images(dist_with_detail_hero(tmp_path, ref, data)) == []
+    problems = verify_hosted_entry_images(
+        dist_with_detail_hero(tmp_path / "b", ref, b"swapped")
+    )
+    assert len(problems) == 1 and "bytes hash to" in problems[0]
+
+
+def test_verify_dist_catches_a_detail_hero_the_ingest_step_skipped(tmp_path):
+    from verify_dist import verify_hosted_entry_images
+
+    problems = verify_hosted_entry_images(
+        dist_with_detail_hero(tmp_path, "assets/detail.png")
+    )
+    assert len(problems) == 1
+    assert "the ingest step did not run" in problems[0]
+
+
+def dist_with_screenshots(tmp_path, refs, files=()):
+    """A dist dir holding one entry whose `screenshotRefs` is *refs*."""
+    dist = tmp_path / "dist"
+    (dist / "assets" / "screenshots").mkdir(parents=True)
+    (dist / "official-registry.json").write_text(
+        json.dumps(
+            {"schemaVersion": 1, "apps": [{"name": "demo-app", "screenshotRefs": refs}]}
+        )
+    )
+    for ref, data in files:
+        (dist / ref).write_bytes(data)
+    return dist
+
+
+def test_verify_dist_checks_every_screenshot(tmp_path):
+    """Element by element: one bad entry in an otherwise good gallery has to be
+    named, and its INDEX has to be in the message or nobody can find it."""
+    from verify_dist import verify_hosted_entry_images
+
+    good, bad = b"\x89PNGgood", b"\x89PNGbad"
+    good_ref = f"assets/screenshots/{hashlib.sha256(good).hexdigest()}.png"
+    bad_ref = f"assets/screenshots/{hashlib.sha256(bad).hexdigest()}.png"
+    dist = dist_with_screenshots(
+        tmp_path, [good_ref, bad_ref], [(good_ref, good), (bad_ref, b"swapped")]
+    )
+    problems = verify_hosted_entry_images(dist)
+    assert len(problems) == 1
+    assert "screenshotRefs[1]" in problems[0] and "bytes hash to" in problems[0]
+
+
+def test_verify_dist_catches_a_screenshot_the_ingest_step_skipped(tmp_path):
+    from verify_dist import verify_hosted_entry_images
+
+    problems = verify_hosted_entry_images(
+        dist_with_screenshots(tmp_path, ["assets/shots/one.png"])
+    )
+    assert len(problems) == 1
+    assert "the ingest step did not run" in problems[0]
+
+
+def test_verify_dist_reports_a_screenshot_field_that_is_not_a_list(tmp_path):
+    """Reported rather than crashing the verifier on `.  __iter__`: this runs as
+    the last gate before upload, so it must survive a malformed document."""
+    from verify_dist import verify_hosted_entry_images
+
+    problems = verify_hosted_entry_images(
+        dist_with_screenshots(tmp_path, {"a": "assets/screenshots/x.png"})
+    )
+    assert len(problems) == 1
+    assert "not a list" in problems[0]
 
 
 # ---------------------------------------------------------------------------
@@ -1555,9 +2137,24 @@ def test_publish_and_schema_agree_on_the_asset_ref_rule():
         (publish.SCHEMA_DIR / "official-registry.schema.json").read_text(encoding="utf-8")
     )
     props = schema["$defs"]["entry"]["properties"]
-    for field in ("iconRef", "iconRefDark"):
+    # `heroRef` is in this list now. It used to be a bare `{"type": "string"}`,
+    # so the ONLY thing standing between an untrusted manifest and a signed
+    # document naming any host was each client re-validating what we had already
+    # signed. Tightening the schema is only safe because `bake_entry` now drops a
+    # value this pattern would reject: a value publish emits and the schema
+    # refuses fails `check_schema` on the ASSEMBLED document, which withholds the
+    # whole catalog -- one app's odd path blocking every other app's release.
+    for field in ("iconRef", "iconRefDark", "heroRef", "heroDetailRef"):
         assert props[field]["pattern"] == publish.ASSET_REF_PATTERN, field
         assert props[field]["maxLength"] == publish.ASSET_REF_MAX, field
+    # The list-valued field carries the rule on its ITEMS, and its cap has to be
+    # the one publish enforces -- a schema that allowed more than publish emits
+    # would be dead slack, and one that allowed fewer would fail `check_schema` on
+    # the assembled document and withhold the whole catalog.
+    shots = props["screenshotRefs"]
+    assert shots["items"]["pattern"] == publish.ASSET_REF_PATTERN
+    assert shots["items"]["maxLength"] == publish.ASSET_REF_MAX
+    assert shots["maxItems"] == publish.SCREENSHOT_MAX_COUNT
 
 
 class TestAssetRefRuleMatchesTheSchema:
