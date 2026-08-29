@@ -156,19 +156,34 @@ def verify_dir(dist: Path, keys: dict[str, bytes] | None = None) -> list[str]:
 
         print(f"verified {doc.name} ({len(payload)} bytes, {algorithm}, key {key_id})")
 
-    problems.extend(verify_hosted_icons(dist))
+    problems.extend(verify_hosted_entry_images(dist))
     problems.extend(verify_hosted_artwork(dist))
     return problems
 
 
-def verify_hosted_icons(dist: Path) -> list[str]:
-    """Check every hosted icon against the digest in its own filename.
+#: Which hosted directory each entry image field must be published under.
+#:
+#: Hardcoded rather than imported from `tools/publish.py` ON PURPOSE: this file
+#: verifies the OUTPUT independently of the tool that produced it, so importing
+#: the producer's constants would let a bug in the producer define what correct
+#: means. It must stay in step with `ICON_ASSET_DIR` and `HERO_ASSET_DIR` there,
+#: the same coupling `.github/scripts/upload-assets.sh` keeps with
+#: `ICON_EXT_ALLOWED`.
+_ENTRY_ASSET_DIRS = {
+    "iconRef": "assets/icons/",
+    "iconRefDark": "assets/icons/",
+    "heroRef": "assets/heroes/",
+}
 
-    Icons carry no signature of their own. Their integrity rides on being
-    content-addressed: the filename IS the sha256 of the bytes, and the filename
-    appears in the registry document, which is signed and verified above. So the
-    chain is signature -> document -> path -> bytes, and this closes the last
-    link for the artifacts we are about to upload.
+
+def verify_hosted_entry_images(dist: Path) -> list[str]:
+    """Check every hosted entry image against the digest in its own filename.
+
+    Icons and hero images carry no signature of their own. Their integrity rides
+    on being content-addressed: the filename IS the sha256 of the bytes, and the
+    filename appears in the registry document, which is signed and verified
+    above. So the chain is signature -> document -> path -> bytes, and this closes
+    the last link for the artifacts we are about to upload.
 
     It is also the reference implementation of what a CLIENT must do after
     downloading an icon. Publishing a document that names a digest and then
@@ -189,11 +204,23 @@ def verify_hosted_icons(dist: Path) -> list[str]:
     for entry in doc.get("apps") or []:
         if not isinstance(entry, dict):
             continue
-        for field in ("iconRef", "iconRefDark"):
+        for field, hosted_dir in _ENTRY_ASSET_DIRS.items():
             ref = entry.get(field)
             # An absolute ref is a builtin's client-local path: those bytes ship
             # with the client, so there is nothing here to check.
             if not isinstance(ref, str) or not ref or ref.startswith("/"):
+                continue
+            # A published relative ref MUST be the content-addressed form. An
+            # authored repo path that reached the output means the ingest step
+            # did not run, and such a ref resolves against the CATALOG root onto
+            # a file only the app's repository has -- so it cannot load, and
+            # nothing downstream would have said why. Same rule
+            # `verify_hosted_artwork` already applies to editorial images.
+            if not ref.startswith(hosted_dir):
+                problems.append(
+                    f"{entry.get('name')}: {field} names {ref!r}, which is not a hosted "
+                    f"asset path under {hosted_dir!r} -- the ingest step did not run"
+                )
                 continue
             path = dist / ref
             if not path.is_file():
@@ -210,7 +237,7 @@ def verify_hosted_icons(dist: Path) -> list[str]:
                 continue
             checked += 1
     if checked:
-        print(f"verified {checked} hosted icon(s) against their content digests")
+        print(f"verified {checked} hosted entry image(s) against their content digests")
     return problems
 
 

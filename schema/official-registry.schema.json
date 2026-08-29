@@ -109,7 +109,13 @@
           "maxLength": 512,
           "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
         },
-        "heroRef": { "type": "string" }
+        "heroRef": {
+          "description": "Path to the app's wide store hero, never a URL. Same shape rules as iconRef, and for the same reason: this document is signed, so it may not name a host a publisher chose. A builtin names an absolute client-local path whose bytes it already ships; every other source's hero is INGESTED at publish time and this is a catalog-relative content-addressed path (assets/heroes/<sha256>.<ext>). An un-ingested repo-relative value would resolve against the catalog root onto a file only the app's repository has, so it could never load.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512,
+          "pattern": "^(?![a-zA-Z][a-zA-Z0-9+.-]*:)(?!//)(?!.*(?:^|/)\\.\\.(?:/|$))/?[A-Za-z0-9_./-]+$"
+        }
       }
     },
 
