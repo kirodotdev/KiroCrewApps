@@ -100,14 +100,34 @@ class PublishError(RuntimeError):
 
 
 def run_git(args: list[str], cwd: Path | None = None) -> str:
-    proc = subprocess.run(
-        ["git", *GIT_HARDENING, *args],
-        cwd=str(cwd) if cwd else None,
-        env=GIT_ENV,
-        capture_output=True,
-        text=True,
-        timeout=GIT_TIMEOUT,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *GIT_HARDENING, *args],
+            cwd=str(cwd) if cwd else None,
+            env=GIT_ENV,
+            capture_output=True,
+            text=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # A timeout is attributable to ONE repository, so it must not be able to
+        # end the run: raised bare it is not a `PublishError`, so it escapes the
+        # per-image `except` in the ingest path, escapes `build_registry`, and
+        # escapes `publish`'s own handler -- a slow or hostile repo would take
+        # every other app's release down with a traceback. Converted here rather
+        # than at each call site because `run_git` has seven of them (ls-remote,
+        # init, remote, fetch, clone, rev-parse, cat-file) and patching only the
+        # ingest ones would leave the rest able to do exactly that.
+        #
+        # Each caller's fatality is UNCHANGED, only its reporting: the ingest
+        # path already degrades a `PublishError` to a warning and keeps going,
+        # while `resolve_commit` and `fetch_manifest` already withhold the
+        # catalog through `findings.error`. A missing git binary is deliberately
+        # NOT folded in -- that is not attributable to any one entry, so it stays
+        # loud.
+        raise PublishError(
+            f"git {' '.join(args[:2])} timed out after {GIT_TIMEOUT}s"
+        ) from exc
     if proc.returncode != 0:
         raise PublishError(
             f"git {' '.join(args[:2])} failed ({proc.returncode}): "
@@ -469,6 +489,83 @@ def bake_asset_ref(
     return value
 
 
+def bake_asset_ref_list(
+    manifest: dict[str, Any],
+    source_type: str,
+    key: str,
+    findings: Findings,
+    app: str,
+    limit: int,
+) -> list[str]:
+    """Read a LIST-valued display asset off a manifest, one rule per element.
+
+    Same contract as `bake_asset_ref`, applied per element: a bad entry is
+    dropped and the rest still publish, because one unusable screenshot should
+    cost that screenshot and nothing else.
+
+    A manifest field's TYPE is as untrusted as its content, and this is the shape
+    where that bites. `screenshots` arrives from a file we do not control, so it
+    may be a dict, a string, or a list holding dicts and numbers -- and a naive
+    `for s in value: s.startswith(...)` raises on every one of those, taking the
+    whole publish down over a field that is meant to be optional. So the
+    container is type-checked before it is iterated and each element before it is
+    read.
+
+    A bare string is REFUSED rather than treated as a one-element list. Python
+    would iterate it per character, and silently publishing an app's screenshot
+    list as its filename's letters is worse than saying the field is wrong.
+    """
+    value = manifest.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        findings.warn(
+            f"{app}: {key} is {type(value).__name__}, not a list; publishing "
+            f"without it"
+        )
+        return []
+    refs: list[str] = []
+    for index, item in enumerate(value):
+        if len(refs) >= limit:
+            findings.warn(
+                f"{app}: {key} declares {len(value)} entries, over the {limit} the "
+                f"catalog publishes; the rest are not published"
+            )
+            break
+        where = f"{key}[{index}]"
+        if not isinstance(item, str) or not item.strip():
+            findings.warn(
+                f"{app}: {where} is not a non-empty string; publishing without it"
+            )
+            continue
+        item = item.strip()
+        if len(item) > ASSET_REF_MAX or not _ASSET_REF_RE.match(item):
+            findings.warn(
+                f"{app}: {where} {item!r} is not a publishable path; publishing "
+                f"without it"
+            )
+            continue
+        absolute = item.startswith("/")
+        if source_type == "builtin" and not absolute:
+            findings.warn(
+                f"{app}: builtin {where} {item!r} is not an absolute client-local "
+                f"path; publishing without it"
+            )
+            continue
+        if source_type != "builtin" and absolute:
+            findings.warn(
+                f"{app}: {where} {item!r} is not a repo-relative path; publishing "
+                f"without it. A fetched manifest may not name an absolute location."
+            )
+            continue
+        if item in refs:
+            # Deduplicated before ingest so the count against `limit` is a count
+            # of distinct pictures, not of repeated lines in a manifest.
+            continue
+        refs.append(item)
+    return refs
+
+
 #: Icon bytes we are willing to host. RASTER ONLY, and that is a decision rather
 #: than an omission.
 #:
@@ -533,13 +630,21 @@ def run_git_bytes(args: list[str], cwd: Path | None = None) -> bytes:
     text-mode helper would silently produce a different file than the repository
     holds -- and the digest we then publish would be a digest of the corruption.
     """
-    proc = subprocess.run(
-        ["git", *GIT_HARDENING, *args],
-        cwd=str(cwd) if cwd else None,
-        env=GIT_ENV,
-        capture_output=True,
-        timeout=GIT_TIMEOUT,
-    )
+    try:
+        proc = subprocess.run(
+            ["git", *GIT_HARDENING, *args],
+            cwd=str(cwd) if cwd else None,
+            env=GIT_ENV,
+            capture_output=True,
+            timeout=GIT_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired as exc:
+        # Same reason as `run_git`: a bare `TimeoutExpired` is not a
+        # `PublishError`, so it would escape the per-image handler that exists to
+        # keep one slow repository from ending everyone's release.
+        raise PublishError(
+            f"git {' '.join(args[:2])} timed out after {GIT_TIMEOUT}s"
+        ) from exc
     if proc.returncode != 0:
         raise PublishError(
             f"git {' '.join(args[:2])} failed ({proc.returncode}): "
@@ -630,6 +735,10 @@ class _FetchedImages:
     _DIR = ""
     _EXT_ALLOWED: frozenset[str] = frozenset()
     _MAX_BYTES = 0
+    #: Aspect the store placement expects, or None for a kind with no fixed one.
+    #: A mismatch is advice, never a refusal.
+    _ASPECT: float | None = None
+    _ASPECT_LABEL = ""
 
     def __init__(
         self,
@@ -709,10 +818,20 @@ class _FetchedImages:
 
         A shape that crops or looks soft is a curation nit, so it is reported and
         published; only the extension and byte checks above can withhold an
-        image. Silent by default because `png_dimensions` reads PNG only -- a
-        webp or jpg yields nothing to judge, and a subclass must not mistake
-        "unmeasurable" for "fine".
+        image. Silent when the kind declares no `_ASPECT` (a screenshot has no
+        fixed placement) and silent for a format `png_dimensions` cannot read --
+        it parses PNG only, so a webp or jpg yields nothing to judge and
+        "unmeasurable" must not be reported as a defect.
         """
+        if self._ASPECT is None:
+            return
+        if dims := png_dimensions(data):
+            width, height = dims
+            if height and abs((width / height) - self._ASPECT) > ART_ASPECT_TOLERANCE:
+                findings.warn(
+                    f"{app}: {self._NOUN} {rel_path!r} is {width}x{height}; the store "
+                    f"placement is {self._ASPECT_LABEL}, so it will letterbox or crop it"
+                )
 
 
 class IconAssets(_FetchedImages):
@@ -752,12 +871,25 @@ ART_MAX_BYTES = 1024 * 1024
 ART_ASPECT = 1600 / 900
 ART_ASPECT_TOLERANCE = 0.08
 
-#: Where hosted app hero images land. Separate from `ICON_ASSET_DIR` so a
-#: listing of either kind is meaningful on its own, and from
-#: `EDITORIAL_ASSET_DIR` because a hero belongs to an APP (fetched from its
+#: Where hosted app art lands. One directory per KIND rather than one shared
+#: pool, so a listing of any kind is meaningful on its own, and separate from
+#: `EDITORIAL_ASSET_DIR` because these belong to an APP (fetched from its
 #: repository at a pinned commit) while editorial art belongs to a curated
 #: SECTION of the store. Same content-addressed, immutable naming as both.
 HERO_ASSET_DIR = "assets/heroes"
+HERO_DETAIL_ASSET_DIR = "assets/hero-details"
+SCREENSHOT_ASSET_DIR = "assets/screenshots"
+
+#: The detail page's banner is far wider than the store card's, per the
+#: publishing guide. Advice only, like every other aspect.
+HERO_DETAIL_ASPECT = 25 / 6
+
+#: How many screenshots one app may publish. A cap is not cosmetic: each one is
+#: a blob read at publish time and a hosted file forever, so without it a single
+#: manifest declaring hundreds would set the cost of everyone's release. Extras
+#: are DROPPED with a diagnostic rather than failing the run, the same way every
+#: other per-image rejection behaves.
+SCREENSHOT_MAX_COUNT = 8
 
 
 class HeroAssets(_FetchedImages):
@@ -781,17 +913,33 @@ class HeroAssets(_FetchedImages):
     _DIR = HERO_ASSET_DIR
     _EXT_ALLOWED = ART_EXT_ALLOWED
     _MAX_BYTES = ART_MAX_BYTES
+    _ASPECT = ART_ASPECT
+    _ASPECT_LABEL = "16:9"
 
-    def _advise_dimensions(
-        self, data: bytes, rel_path: str, app: str, findings: Findings
-    ) -> None:
-        if dims := png_dimensions(data):
-            width, height = dims
-            if height and abs((width / height) - ART_ASPECT) > ART_ASPECT_TOLERANCE:
-                findings.warn(
-                    f"{app}: hero image {rel_path!r} is {width}x{height}; the store "
-                    f"placement is 16:9, so it will letterbox or crop it"
-                )
+
+class HeroDetailAssets(_FetchedImages):
+    """The detail page's banner. Same policy as the hero at a wider aspect."""
+
+    _NOUN = "detail hero"
+    _DIR = HERO_DETAIL_ASSET_DIR
+    _EXT_ALLOWED = ART_EXT_ALLOWED
+    _MAX_BYTES = ART_MAX_BYTES
+    _ASPECT = HERO_DETAIL_ASPECT
+    _ASPECT_LABEL = "25:6"
+
+
+class ScreenshotAssets(_FetchedImages):
+    """One of an app's store screenshots.
+
+    No `_ASPECT`: a screenshot is whatever shape the app's own window is, and the
+    store lays them out in a scroller rather than a fixed frame. Reporting a
+    crop here would be advice about the app, not about the asset.
+    """
+
+    _NOUN = "screenshot"
+    _DIR = SCREENSHOT_ASSET_DIR
+    _EXT_ALLOWED = ART_EXT_ALLOWED
+    _MAX_BYTES = ART_MAX_BYTES
 
 
 class EditorialAssets:
@@ -895,15 +1043,17 @@ def bake_entry(
     findings: Findings,
     assets: IconAssets | None = None,
     heroes: HeroAssets | None = None,
+    hero_details: HeroDetailAssets | None = None,
+    shots: ScreenshotAssets | None = None,
 ) -> dict[str, Any]:
     """Produce a published entry: authored identity + generated display fields.
 
-    *assets* and *heroes*, when given, ingest a fetched app's icon and hero into
-    the catalog and the entry carries the hosted paths instead of the
-    repo-relative ones. Omitted (as in a dry run, and in tests that only exercise
-    field derivation) the entry keeps the repo-relative path, which is still a
-    valid published ref -- but only `verify_dist` running on a REAL publish
-    proves an un-ingested one never reaches the CDN.
+    The ingesters, when given, pull a fetched app's art into the catalog and the
+    entry carries the hosted paths instead of the repo-relative ones. Omitted (as
+    in a dry run, and in tests that only exercise field derivation) the entry
+    keeps the repo-relative path, which is still a valid published ref -- but only
+    `verify_dist` running on a REAL publish proves an un-ingested one never
+    reaches the CDN.
     """
     name = authored["name"]
     if manifest.get("name") and manifest["name"] != name:
@@ -1053,32 +1203,58 @@ def bake_entry(
                 f"Declare a top-level 'iconPath' naming a raster file in the "
                 f"repository ({', '.join(sorted(ICON_EXT_ALLOWED))})."
             )
-    # The hero goes through the SAME two stages as the icon above, which it did
-    # not before: it was `entry["heroRef"] = manifest_str(manifest, "heroImage")`,
-    # a raw read from an untrusted manifest straight into a document we SIGN.
-    # `heroRef` also carried no `pattern` in the published schema, so nothing
-    # downstream re-imposed the rule either, and the field was relying on each
-    # client to re-validate what the publisher had already signed.
+    # Every wide-art field goes through the SAME two stages as the icon above,
+    # which `heroRef` did not: it was `entry["heroRef"] =
+    # manifest_str(manifest, "heroImage")`, a raw read from an untrusted manifest
+    # straight into a document we SIGN. `heroRef` also carried no `pattern` in the
+    # published schema, so nothing downstream re-imposed the rule either, and the
+    # field was relying on each client to re-validate what the publisher had
+    # already signed. `heroDetailRef` and `screenshotRefs` were not published at
+    # all, so an app's detail page had a banner and a gallery in its manifest that
+    # the store could never learn about.
     #
-    # Unlike the icon's `iconUrl`/`iconPath` pair, a hero uses ONE manifest key
-    # for both source types: a builtin declares `heroImage` as an absolute
-    # client-local path and a fetched app declares it repo-relative, under that
-    # same name. So the same key is passed for both roles here. That makes
-    # `bake_asset_ref`'s "you used the other source type's key" warning
-    # unreachable for hero by construction -- it fires only when this key is
-    # empty and the other is not, and they are the same key -- while the checks
-    # hero was missing entirely still apply: the path pattern, and
-    # absolute-only-for-a-builtin.
-    hero = bake_asset_ref(manifest, source_type, "heroImage", "heroImage", findings, name)
-    if hero and source_type != "builtin" and heroes is not None:
-        # Dropped rather than left repo-relative when ingest refuses the bytes.
-        # Keeping the authored path would publish a ref that resolves against the
-        # catalog root onto a file only the app's repository has -- a guaranteed
-        # 404 that looks like a store bug, where no hero at all is merely a card
-        # without a banner.
-        hero = heroes.add(source["url"], commit, hero, name, findings)
-    if hero:
-        entry["heroRef"] = hero
+    # Unlike the icon's `iconUrl`/`iconPath` pair, these use ONE manifest key for
+    # both source types: a builtin declares an absolute client-local path and a
+    # fetched app declares it repo-relative, under that same name. So the same key
+    # is passed for both roles here. That makes `bake_asset_ref`'s "you used the
+    # other source type's key" warning unreachable for them by construction -- it
+    # fires only when this key is empty and the other is not, and they are the
+    # same key -- while the checks they were missing still apply: the path
+    # pattern, and absolute-only-for-a-builtin.
+    for manifest_key, field, ingester in (
+        ("heroImage", "heroRef", heroes),
+        ("heroImageDetail", "heroDetailRef", hero_details),
+    ):
+        ref = bake_asset_ref(
+            manifest, source_type, manifest_key, manifest_key, findings, name
+        )
+        if ref and source_type != "builtin" and ingester is not None:
+            # Dropped rather than left repo-relative when ingest refuses the
+            # bytes. Keeping the authored path would publish a ref that resolves
+            # against the catalog root onto a file only the app's repository has
+            # -- a guaranteed 404 that looks like a store bug, where no art at
+            # all is merely a card without a picture.
+            ref = ingester.add(source["url"], commit, ref, name, findings)
+        if ref:
+            entry[field] = ref
+
+    declared_shots = bake_asset_ref_list(
+        manifest, source_type, "screenshots", findings, name, SCREENSHOT_MAX_COUNT
+    )
+    if declared_shots:
+        if source_type != "builtin" and shots is not None:
+            hosted = [
+                stored
+                for shot in declared_shots
+                if (stored := shots.add(source["url"], commit, shot, name, findings))
+            ]
+        else:
+            hosted = declared_shots
+        # Only when at least one survived: an empty array and an absent field read
+        # the same to a client, and the absent one is honest about there being no
+        # gallery rather than implying an empty one.
+        if hosted:
+            entry["screenshotRefs"] = hosted
 
     return entry
 
@@ -1106,6 +1282,8 @@ def build_registry(
     findings: Findings,
     assets: IconAssets | None = None,
     heroes: HeroAssets | None = None,
+    hero_details: HeroDetailAssets | None = None,
+    shots: ScreenshotAssets | None = None,
 ) -> dict[str, Any]:
     apps: list[dict[str, Any]] = []
     for authored_entry in authored.get("apps") or []:
@@ -1116,7 +1294,12 @@ def build_registry(
         origin = source["manifestFrom"] if source.get("type") == "builtin" else source
         commit = resolver(origin["url"], origin["ref"])
         manifest = fetcher(origin["url"], commit, origin.get("subdir"))
-        apps.append(bake_entry(authored_entry, manifest, commit, findings, assets, heroes))
+        apps.append(
+            bake_entry(
+                authored_entry, manifest, commit, findings,
+                assets, heroes, hero_details, shots,
+            )
+        )
 
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     content = {
@@ -1379,6 +1562,8 @@ def publish(
     fetcher: Callable[..., dict[str, Any]]
     assets: IconAssets | None
     heroes: HeroAssets | None
+    hero_details: HeroDetailAssets | None
+    shots: ScreenshotAssets | None
     art: EditorialAssets | None
     if dry_run:
         # Enough to exercise stamping and schema conformance offline. Publishing
@@ -1387,16 +1572,21 @@ def publish(
         fetcher = lambda url, commit, subdir=None: {}  # noqa: E731
         assets = None
         heroes = None
+        hero_details = None
+        shots = None
         art = None
     else:
         resolver, fetcher = resolve_commit, fetch_manifest
         assets = IconAssets(fetch_blob, blob_size)
         heroes = HeroAssets(fetch_blob, blob_size)
+        hero_details = HeroDetailAssets(fetch_blob, blob_size)
+        shots = ScreenshotAssets(fetch_blob, blob_size)
         art = EditorialAssets(ROOT)
 
     try:
         registry_doc = build_registry(
-            authored_registry, resolver, fetcher, now, findings, assets, heroes
+            authored_registry, resolver, fetcher, now, findings,
+            assets, heroes, hero_details, shots,
         )
     except PublishError as exc:
         findings.error(str(exc))
@@ -1452,15 +1642,16 @@ def publish(
             findings.error(str(exc))
             return findings
 
-    # Icons, hero images and editorial artwork are added AFTER signing on
+    # Every hosted image is added AFTER signing on
     # purpose: they get no sidecar of their own. Their integrity rides on the
     # digest in the filename, which appears in a document that IS signed -- so
     # one signature covers every image, and a client checks a download by hashing
     # it against its own path.
     if assets is not None:
         artifacts.update(assets.files)
-    if heroes is not None:
-        artifacts.update(heroes.files)
+    for ingested in (heroes, hero_details, shots):
+        if ingested is not None:
+            artifacts.update(ingested.files)
     if art is not None:
         artifacts.update(art.files)
 

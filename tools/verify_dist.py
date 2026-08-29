@@ -173,6 +173,14 @@ _ENTRY_ASSET_DIRS = {
     "iconRef": "assets/icons/",
     "iconRefDark": "assets/icons/",
     "heroRef": "assets/heroes/",
+    "heroDetailRef": "assets/hero-details/",
+}
+
+#: List-valued entry image fields, checked element by element. Kept separate from
+#: the scalar table rather than folded in with an isinstance probe, so a field
+#: whose TYPE the publisher got wrong cannot quietly land in the wrong branch.
+_ENTRY_ASSET_LIST_DIRS = {
+    "screenshotRefs": "assets/screenshots/",
 }
 
 
@@ -204,41 +212,65 @@ def verify_hosted_entry_images(dist: Path) -> list[str]:
     for entry in doc.get("apps") or []:
         if not isinstance(entry, dict):
             continue
+        name = entry.get("name")
         for field, hosted_dir in _ENTRY_ASSET_DIRS.items():
-            ref = entry.get(field)
-            # An absolute ref is a builtin's client-local path: those bytes ship
-            # with the client, so there is nothing here to check.
-            if not isinstance(ref, str) or not ref or ref.startswith("/"):
+            found, trouble = _check_hosted_ref(
+                dist, entry.get(field), hosted_dir, f"{name}: {field}"
+            )
+            checked += found
+            problems.extend(trouble)
+        for field, hosted_dir in _ENTRY_ASSET_LIST_DIRS.items():
+            refs = entry.get(field)
+            if refs is None:
                 continue
-            # A published relative ref MUST be the content-addressed form. An
-            # authored repo path that reached the output means the ingest step
-            # did not run, and such a ref resolves against the CATALOG root onto
-            # a file only the app's repository has -- so it cannot load, and
-            # nothing downstream would have said why. Same rule
-            # `verify_hosted_artwork` already applies to editorial images.
-            if not ref.startswith(hosted_dir):
+            if not isinstance(refs, list):
                 problems.append(
-                    f"{entry.get('name')}: {field} names {ref!r}, which is not a hosted "
-                    f"asset path under {hosted_dir!r} -- the ingest step did not run"
+                    f"{name}: {field} is {type(refs).__name__}, not a list"
                 )
                 continue
-            path = dist / ref
-            if not path.is_file():
-                problems.append(
-                    f"{entry.get('name')}: {field} names {ref!r}, which is not in {dist}"
+            for index, ref in enumerate(refs):
+                found, trouble = _check_hosted_ref(
+                    dist, ref, hosted_dir, f"{name}: {field}[{index}]"
                 )
-                continue
-            actual = hashlib.sha256(path.read_bytes()).hexdigest()
-            if actual != path.stem:
-                problems.append(
-                    f"{entry.get('name')}: {field} {ref!r} is addressed by digest "
-                    f"{path.stem!r} but its bytes hash to {actual!r}"
-                )
-                continue
-            checked += 1
+                checked += found
+                problems.extend(trouble)
     if checked:
         print(f"verified {checked} hosted entry image(s) against their content digests")
     return problems
+
+
+def _check_hosted_ref(
+    dist: Path, ref: object, hosted_dir: str, where: str
+) -> tuple[int, list[str]]:
+    """Check one published ref: hosted path -> file present -> bytes match digest.
+
+    Returns how many refs were actually verified (0 or 1) and any problems, so a
+    caller can report coverage without counting the skips. An absent field and an
+    absolute ref both verify nothing and are not problems: an absolute ref is a
+    builtin's client-local path, whose bytes ship with the client.
+    """
+    if not isinstance(ref, str) or not ref or ref.startswith("/"):
+        return 0, []
+    # A published relative ref MUST be the content-addressed form. An authored
+    # repo path that reached the output means the ingest step did not run, and
+    # such a ref resolves against the CATALOG root onto a file only the app's
+    # repository has -- so it cannot load, and nothing downstream would have said
+    # why. Same rule `verify_hosted_artwork` already applies to editorial images.
+    if not ref.startswith(hosted_dir):
+        return 0, [
+            f"{where} names {ref!r}, which is not a hosted asset path under "
+            f"{hosted_dir!r} -- the ingest step did not run"
+        ]
+    path = dist / ref
+    if not path.is_file():
+        return 0, [f"{where} names {ref!r}, which is not in {dist}"]
+    actual = hashlib.sha256(path.read_bytes()).hexdigest()
+    if actual != path.stem:
+        return 0, [
+            f"{where} {ref!r} is addressed by digest {path.stem!r} but its bytes "
+            f"hash to {actual!r}"
+        ]
+    return 1, []
 
 
 def verify_hosted_artwork(dist: Path) -> list[str]:
