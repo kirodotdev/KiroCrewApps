@@ -95,6 +95,12 @@
           "maxItems": 16
         },
         "version": { "type": "string", "maxLength": 64 },
+        "stargazersCount": {
+          "description": "GENERATED at publish: the source repository's GitHub star count at the moment the document was built. Absent means UNKNOWN (non-GitHub host, missing repo, rate limit, or fetch failure), never zero -- publish records no field rather than a number it has no evidence for. Bounded to the JS safe-integer range so a consumer never renders a count JavaScript cannot represent exactly.",
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
         "iconRef": {
           "description": "Path to the app's icon, never a URL. A builtin names an absolute client-local path (/app-assets/<app>/icon.svg) whose bytes it already ships. Every other source's icon is INGESTED at publish time and this is a catalog-relative content-addressed path (assets/icons/<sha256>.<ext>): the filename IS the digest of the bytes, and it appears in this signed document, so a client that verifies the signature and then hashes what it downloaded has end-to-end integrity for every icon from one signature. Hosting the bytes also takes the publisher's repository off the render path, which is what a per-icon clone through a proxy used to require.",
           "type": "string",
