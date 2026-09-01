@@ -102,6 +102,10 @@ jobs:
       - name: Publish (signed)
         env:
           KIROCREW_REGISTRY_KMS_KEY_ID: ${{ vars.REGISTRY_KMS_KEY_ID }}
+          # Authenticated GitHub API rate limit for star-count baking; a
+          # missing or expired token degrades to "no star count", never a
+          # failed publish.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: python tools/publish.py --out dist
 
       # Verify against the PUBLIC key committed to this repository, not against

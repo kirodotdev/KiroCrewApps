@@ -2346,3 +2346,173 @@ class TestAuthoredCannotForgeGeneratedFields:
             {"schemaVersion": 1, "categories": ["dev"], **self.FORGED}, now
         )
         assert clean["revision"] == forged["revision"]
+
+
+# --------------------------------------------------------------------------
+# Star counts
+# --------------------------------------------------------------------------
+
+
+class TestBakesStarCounts:
+    """`stargazersCount` is GENERATED at publish via an injected fetcher.
+
+    Absence means UNKNOWN, never zero: a run that could not read the count
+    publishes NO field rather than a number it has no evidence for, and only
+    warns -- a star count is never worth failing a release over.
+    """
+
+    def test_git_entry_bakes_the_fetched_count(self):
+        entry = publish.bake_entry(
+            authored(), MANIFEST, "a" * 40, Findings(),
+            stars_fetcher=lambda url: 42,
+        )
+        assert entry["stargazersCount"] == 42
+
+    def test_fetcher_sees_the_source_url(self):
+        seen: list[str] = []
+
+        def fetcher(url: str) -> int | None:
+            seen.append(url)
+            return 1
+
+        publish.bake_entry(
+            authored(url="https://github.com/o/r"), MANIFEST, "a" * 40,
+            Findings(), stars_fetcher=fetcher,
+        )
+        assert seen == ["https://github.com/o/r"]
+
+    def test_unknown_count_omits_the_field_and_warns(self):
+        findings = Findings()
+        entry = publish.bake_entry(
+            authored(), MANIFEST, "a" * 40, findings,
+            stars_fetcher=lambda url: None,
+        )
+        assert "stargazersCount" not in entry, "absent means unknown, never 0"
+        assert findings.errors == []
+        assert any("star count" in w for w in findings.warnings)
+
+    def test_no_fetcher_means_no_field_and_no_warning(self):
+        """A dry run injects no fetcher; that is silence, not a degraded fetch."""
+        findings = Findings()
+        entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings)
+        assert "stargazersCount" not in entry
+        assert not any("star count" in w for w in findings.warnings)
+
+    def test_builtin_never_calls_the_fetcher(self):
+        def explode(url: str) -> int | None:
+            raise AssertionError("a builtin has no repository to count stars on")
+
+        entry = publish.bake_entry(
+            BUILTIN, MANIFEST, "b" * 40, Findings(), stars_fetcher=explode
+        )
+        assert "stargazersCount" not in entry
+
+    def test_published_schema_accepts_the_field(self):
+        findings = Findings()
+        doc = publish.build_registry(
+            {"schemaVersion": 1, "apps": [authored(url="https://github.com/o/r.git")]},
+            lambda url, ref: "a" * 40,
+            lambda url, commit, subdir=None: MANIFEST,
+            datetime.now(timezone.utc),
+            findings,
+            stars_fetcher=lambda url: 5,
+        )
+        assert doc["apps"][0]["stargazersCount"] == 5
+
+        from validate import check_schema
+        out = Findings()
+        check_schema(
+            doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out
+        )
+        assert out.errors == [], out.errors
+
+
+class TestFetchGithubStars:
+    """URL gating and response hygiene; no test may reach api.github.com."""
+
+    @pytest.fixture(autouse=True)
+    def no_network(self, monkeypatch):
+        def refuse(*args, **kwargs):
+            raise AssertionError("test must not perform a real HTTP request")
+
+        monkeypatch.setattr(publish.urllib.request, "urlopen", refuse)
+
+    @pytest.mark.parametrize(
+        "url",
+        [
+            "https://gitlab.com/o/r",
+            "https://example.com/o/r.git",
+            "https://github.com/only-owner",
+            "https://github.com/o/r/extra/path",
+            "http://github.com/o/r",
+        ],
+    )
+    def test_non_github_repo_urls_skip_without_a_request(self, url):
+        assert publish.fetch_github_stars(url) is None
+
+    def test_fetch_failure_returns_none(self, monkeypatch):
+        def boom(*args, **kwargs):
+            raise OSError("timed out")
+
+        monkeypatch.setattr(publish.urllib.request, "urlopen", boom)
+        assert publish.fetch_github_stars("https://github.com/o/r") is None
+
+    @pytest.mark.parametrize("hostile", [None, "9", -1, True, [3], {"n": 1}, 9_007_199_254_740_992])
+    def test_non_count_payload_returns_none(self, monkeypatch, hostile):
+        """The response body is a file we do not control; a hostile
+        `stargazers_count` must degrade to unknown, not publish. The upper
+        bound mirrors the schema's `maximum` (JS safe-integer range)."""
+        import contextlib as _ctx
+        import io
+
+        class FakeResponse(io.BytesIO):
+            pass
+
+        body = json.dumps({"stargazers_count": hostile}).encode("utf-8")
+
+        @_ctx.contextmanager
+        def fake_urlopen(request, timeout=None):
+            yield FakeResponse(body)
+
+        monkeypatch.setattr(publish.urllib.request, "urlopen", fake_urlopen)
+        assert publish.fetch_github_stars("https://github.com/o/r") is None
+
+
+class TestBudgetedStarsFetcher:
+    """A run-wide budget bounds TOTAL star-fetch time across all entries.
+
+    Each fetch has its own timeout, but build_registry() walks entries
+    serially — enough stalled requests would outlive the CI job even though
+    every individual fetch "degraded gracefully". Past the budget, remaining
+    entries publish without the field instead of delaying the release.
+    """
+
+    def test_fetches_normally_within_the_budget(self, monkeypatch):
+        monkeypatch.setattr(publish, "fetch_github_stars", lambda url: 42)
+        fetch = publish.budgeted_stars_fetcher()
+        assert fetch("https://github.com/o/r") == 42
+
+    def test_stops_fetching_once_the_budget_is_spent(self, monkeypatch):
+        calls: list[str] = []
+
+        def fake_fetch(url):
+            calls.append(url)
+            return 42
+
+        monkeypatch.setattr(publish, "fetch_github_stars", fake_fetch)
+        # fetch() reads the clock ONCE per call: first call pins the deadline
+        # at 0.0 + budget, second call observes a time past it.
+        clock = iter([0.0, publish.STARS_TOTAL_BUDGET + 1.0])
+        monkeypatch.setattr(publish.time, "monotonic", lambda: next(clock))
+        fetch = publish.budgeted_stars_fetcher()
+        assert fetch("https://github.com/o/first") == 42, "within budget: fetched"
+        assert fetch("https://github.com/o/late") is None, "past budget: skipped"
+        assert calls == ["https://github.com/o/first"], "no request after the deadline"
+
+    def test_the_deadline_starts_at_the_first_call_not_construction(self, monkeypatch):
+        monkeypatch.setattr(publish, "fetch_github_stars", lambda url: 7)
+        # Construction time is irrelevant: the first call starts the clock.
+        clock = iter([100.0, 100.0])
+        monkeypatch.setattr(publish.time, "monotonic", lambda: next(clock))
+        fetch = publish.budgeted_stars_fetcher()
+        assert fetch("https://github.com/o/r") == 7

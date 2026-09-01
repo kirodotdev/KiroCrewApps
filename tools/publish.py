@@ -41,7 +41,9 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
+import urllib.request
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -70,6 +72,15 @@ COMMIT_RE = re.compile(r"^[a-f0-9]{40}$|^[a-f0-9]{64}$")
 HTTPS_RE = re.compile(r"^https://[^\s\x00]+$")
 
 GIT_TIMEOUT = 120
+
+# Star counts are display garnish, not publish substance: the fetch gets a short
+# leash and any failure degrades to "unknown" rather than delaying or halting a
+# release. Only canonical https://github.com/<owner>/<repo> URLs qualify --
+# other git hosts have no GitHub star count to report.
+STARS_TIMEOUT = 10
+GITHUB_REPO_RE = re.compile(
+    r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
+)
 
 # Hardening for git invocations against remotes we do not control. The schema
 # already restricts `url` to https, but this is the layer that actually executes
@@ -299,6 +310,81 @@ def fetch_manifest(url: str, commit: str, subdir: str | None = None) -> dict[str
     if not isinstance(manifest, dict):
         raise PublishError(f"{url}: {rel.as_posix()} is not a JSON object")
     return manifest
+
+
+def fetch_github_stars(url: str) -> int | None:
+    """Read a GitHub repository's stargazer count, or ``None`` for "unknown".
+
+    ``None`` covers every way the count can be unavailable -- a non-GitHub
+    host, a missing or private repo, rate limiting, a timeout, or a malformed
+    response. Callers must treat absence as "unknown", never as zero, and no
+    failure here may raise: a star count is not worth failing a release over.
+
+    ``GITHUB_TOKEN``, when present, is sent as a bearer token so CI runs get
+    the authenticated rate limit instead of the anonymous one.
+    """
+    match = GITHUB_REPO_RE.match(url)
+    if not match:
+        return None
+    owner, repo = match.group(1), match.group(2)
+
+    headers = {
+        "Accept": "application/vnd.github+json",
+        # api.github.com rejects requests without a User-Agent outright.
+        "User-Agent": "kirocrew-apps-publish",
+    }
+    if token := os.environ.get("GITHUB_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+
+    request = urllib.request.Request(
+        f"https://api.github.com/repos/{owner}/{repo}", headers=headers
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=STARS_TIMEOUT) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except Exception:
+        return None
+
+    count = payload.get("stargazers_count") if isinstance(payload, dict) else None
+    # `bool` is an `int` subclass; a hostile `true` must not publish as 1.
+    # The upper bound mirrors the schema's `maximum` (JS safe-integer range):
+    # a count above it is not a plausible count, and signing one would ship a
+    # value JavaScript consumers cannot represent exactly.
+    if isinstance(count, bool) or not isinstance(count, int) or count < 0:
+        return None
+    if count > 9_007_199_254_740_991:
+        return None
+    return count
+
+
+#: Run-wide wall-clock budget for ALL star fetches in one publish. Each fetch
+#: already has its own STARS_TIMEOUT, but build_registry() walks entries
+#: serially, so per-fetch timeouts alone scale as 10s x entry count -- enough
+#: stalled requests would outlive the CI job even though every individual
+#: fetch "degraded gracefully". Stars are garnish: past this budget every
+#: remaining entry publishes without the field rather than delaying a release.
+STARS_TOTAL_BUDGET = 120.0
+
+
+def budgeted_stars_fetcher() -> Callable[[str], int | None]:
+    """A ``fetch_github_stars`` that stops fetching once the run budget is spent.
+
+    The deadline starts at the first call (not at construction), so setup work
+    between building the fetcher and reaching the first git entry does not eat
+    the budget. After the deadline every call returns ``None`` immediately --
+    the caller's absence-means-unknown contract already handles that.
+    """
+    deadline: list[float] = []
+
+    def fetch(url: str) -> int | None:
+        now = time.monotonic()
+        if not deadline:
+            deadline.append(now + STARS_TOTAL_BUDGET)
+        if now >= deadline[0]:
+            return None
+        return fetch_github_stars(url)
+
+    return fetch
 
 
 def manifest_str(manifest: dict[str, Any], key: str) -> str:
@@ -1054,6 +1140,7 @@ def bake_entry(
     heroes: HeroAssets | None = None,
     hero_details: HeroDetailAssets | None = None,
     shots: ScreenshotAssets | None = None,
+    stars_fetcher: Callable[[str], int | None] | None = None,
 ) -> dict[str, Any]:
     """Produce a published entry: authored identity + generated display fields.
 
@@ -1148,6 +1235,22 @@ def bake_entry(
 
     if version := manifest_str(manifest, "version"):
         entry["version"] = version[:64]
+
+    # Star counts are GENERATED, never authored, and only a git source has a
+    # repository to count stars on -- a builtin ships in the client and never
+    # touches the network here. A missing count publishes NO field: absence
+    # means "unknown", and writing 0 (or a stale prior value) would state a
+    # popularity fact this run has no evidence for.
+    if source.get("type") == "git" and stars_fetcher is not None:
+        stars = stars_fetcher(source["url"])
+        if stars is not None:
+            entry["stargazersCount"] = stars
+        else:
+            findings.warn(
+                f"{name}: no star count available for {source['url']} "
+                f"(non-GitHub host, missing repo, rate limit, or timeout); "
+                f"publishing without stargazersCount"
+            )
 
     source_type = str(source.get("type") or "")
     # `iconPath` is the key a fetched app declares; `iconUrl` is the absolute
@@ -1293,6 +1396,7 @@ def build_registry(
     heroes: HeroAssets | None = None,
     hero_details: HeroDetailAssets | None = None,
     shots: ScreenshotAssets | None = None,
+    stars_fetcher: Callable[[str], int | None] | None = None,
 ) -> dict[str, Any]:
     apps: list[dict[str, Any]] = []
     for authored_entry in authored.get("apps") or []:
@@ -1306,7 +1410,7 @@ def build_registry(
         apps.append(
             bake_entry(
                 authored_entry, manifest, commit, findings,
-                assets, heroes, hero_details, shots,
+                assets, heroes, hero_details, shots, stars_fetcher,
             )
         )
 
@@ -1569,6 +1673,7 @@ def publish(
 
     resolver: Callable[[str, str], str]
     fetcher: Callable[..., dict[str, Any]]
+    stars_fetcher: Callable[[str], int | None] | None
     assets: IconAssets | None
     heroes: HeroAssets | None
     hero_details: HeroDetailAssets | None
@@ -1579,6 +1684,7 @@ def publish(
         # for real must never take this path, hence the separate flag.
         resolver = lambda url, ref: ref if COMMIT_RE.match(ref) else "0" * 40  # noqa: E731
         fetcher = lambda url, commit, subdir=None: {}  # noqa: E731
+        stars_fetcher = None
         assets = None
         heroes = None
         hero_details = None
@@ -1586,6 +1692,7 @@ def publish(
         art = None
     else:
         resolver, fetcher = resolve_commit, fetch_manifest
+        stars_fetcher = budgeted_stars_fetcher()
         assets = IconAssets(fetch_blob, blob_size)
         heroes = HeroAssets(fetch_blob, blob_size)
         hero_details = HeroDetailAssets(fetch_blob, blob_size)
@@ -1595,7 +1702,7 @@ def publish(
     try:
         registry_doc = build_registry(
             authored_registry, resolver, fetcher, now, findings,
-            assets, heroes, hero_details, shots,
+            assets, heroes, hero_details, shots, stars_fetcher,
         )
     except PublishError as exc:
         findings.error(str(exc))
