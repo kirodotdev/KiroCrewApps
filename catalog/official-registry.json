@@ -91,6 +91,24 @@
       }
     },
     {
+      "name": "aws-control",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "67152820354de54c31713288897cf7e327e92235",
+          "subdir": "src/kiro_crew/apps/builtins/aws_control"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
       "name": "channels",
       "source": {
         "type": "builtin",
