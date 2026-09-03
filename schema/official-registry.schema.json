@@ -210,6 +210,13 @@
           "type": "string",
           "pattern": "^[a-f0-9]{40}$|^[a-f0-9]{64}$"
         },
+        "sourceTag": {
+          "description": "GENERATED, display/provenance only. When the curator's ref was a tag, this is that tag's name -- the human-readable release the `ref` pin was resolved from. Never a fetch or verification coordinate: a tag can be force-moved after publish, so a client honouring it over `ref` would trade the immutable pin for a mutable pointer. Absent when the curator pinned a commit or named a branch.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\u0000\\s]+$"
+        },
         "subdir": {
           "description": "Contained relative path: no absolute, no '..', no backslash, no NUL, and not empty (omit the field instead of passing \"\"). The '..' rule is a substring test, so it also rejects otherwise-legitimate names containing a double dot such as 'a..b'. That is deliberate -- this value becomes a filesystem path, and a conservative test is worth more than the rare directory name it costs.",
           "type": "string",
