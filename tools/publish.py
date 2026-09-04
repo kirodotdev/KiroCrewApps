@@ -44,6 +44,7 @@ import tempfile
 import time
 import unicodedata
 import urllib.request
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
@@ -158,8 +159,32 @@ def require_https(url: str) -> None:
         raise PublishError(f"refusing non-https git url: {url!r}")
 
 
+@dataclass(frozen=True)
+class ResolvedPin:
+    """What a curator's ref resolved to.
+
+    ``commit`` is the immutable pin the published document carries. ``tag`` is
+    set only when the ref matched a tag: it is the human-readable release name
+    the pin came from, published as ``sourceTag`` for display and provenance.
+    The tag is NEVER a trust anchor -- a tag is a mutable pointer, so the commit
+    remains the only coordinate anything downstream fetches or verifies.
+    """
+
+    commit: str
+    tag: str | None = None
+
+
 def resolve_commit(url: str, ref: str) -> str:
     """Resolve a branch/tag to the commit it points at.
+
+    Kept alongside :func:`resolve_pin` because callers that only need the pin
+    (and a body of existing tests) use the plain-string form.
+    """
+    return resolve_pin(url, ref).commit
+
+
+def resolve_pin(url: str, ref: str) -> ResolvedPin:
+    """Resolve a branch/tag to the commit it points at, remembering the tag.
 
     A ref that is already a commit passes through: re-resolving it would be a
     no-op at best and, for a server that does not advertise it, a spurious
@@ -167,7 +192,7 @@ def resolve_commit(url: str, ref: str) -> str:
     """
     require_https(url)
     if COMMIT_RE.match(ref):
-        return ref
+        return ResolvedPin(ref)
 
     # Ask for the peeled form alongside the ref itself. Without the explicit
     # `^{}` pattern, `ls-remote <url> v1` reports only `refs/tags/v1`, whose sha
@@ -191,14 +216,59 @@ def resolve_commit(url: str, ref: str) -> str:
         f"refs/heads/{ref}",
         ref,
     ):
-        if name in candidates:
-            return candidates[name]
+        if name not in candidates:
+            continue
+        # A fully qualified ref (`refs/tags/v1` written verbatim as the source
+        # ref) matches its own RAW form here, so peel it the same way the short
+        # forms above do: prefer the `^{}` candidate -- for an annotated tag the
+        # raw ref names the TAG OBJECT, and pinning that halts publishing at the
+        # object-type check. A ref with no peeled line (lightweight tag, branch)
+        # already names the commit.
+        sha = candidates.get(f"{name}^{{}}", candidates[name])
+        # Tag-ness is decided by WHICH ref matched, not by what the ref looks
+        # like -- and the published name comes from the matched ref too, so a
+        # qualified spelling never leaks its `refs/tags/` namespace.
+        is_tag = name.startswith("refs/tags/")
+        return ResolvedPin(sha, _tag_name(name) if is_tag else None)
 
-    if len(candidates) > 1:
+    # Collapse each annotated tag's pair of lines (`X` and `X^{}`) into one
+    # entry pinned to the peeled commit, so a pattern matching a single
+    # annotated tag is one candidate rather than a spurious ambiguity.
+    peeled: dict[str, str] = {}
+    for name, sha in candidates.items():
+        if name.endswith("^{}"):
+            continue
+        peeled[name] = candidates.get(f"{name}^{{}}", sha)
+    if not peeled:
+        peeled = dict(candidates)
+    if len(peeled) > 1:
         raise PublishError(
-            f"ref {ref!r} is ambiguous at {url}: {sorted(candidates)}"
+            f"ref {ref!r} is ambiguous at {url}: {sorted(peeled)}"
         )
-    return next(iter(candidates.values()))
+    only_name, only_sha = next(iter(peeled.items()))
+    if only_name.startswith("refs/tags/"):
+        # Derive the tag from the REF THAT MATCHED, never from what the curator
+        # typed: `ls-remote` accepts glob patterns, so a ref like `v1.*` can
+        # reach this fallback by matching a single tag -- and publishing the
+        # pattern itself would sign a release name that does not exist.
+        return ResolvedPin(only_sha, _tag_name(only_name))
+    return ResolvedPin(only_sha, None)
+
+
+def _tag_name(ref_name: str) -> str:
+    """The tag name inside a ``refs/tags/...`` ref, peel suffix stripped."""
+    name = ref_name[len("refs/tags/"):]
+    return name[:-3] if name.endswith("^{}") else name
+
+
+#: Mirrors the published schema's `sourceTag` constraints (`^[^\u0000\s]+$`,
+#: 1-255 chars). Kept in code so `bake_entry` can degrade ONE entry gracefully
+#: instead of letting the final whole-document schema check refuse the catalog.
+_SOURCE_TAG_RE = re.compile(r"^[^\u0000\s]{1,255}$")
+
+
+def _publishable_source_tag(tag: str) -> bool:
+    return bool(_SOURCE_TAG_RE.match(tag))
 
 
 # Checkouts kept for the process, keyed by the exact bytes they contain. Every
@@ -1141,6 +1211,8 @@ def bake_entry(
     hero_details: HeroDetailAssets | None = None,
     shots: ScreenshotAssets | None = None,
     stars_fetcher: Callable[[str], int | None] | None = None,
+    *,
+    tag: str | None = None,
 ) -> dict[str, Any]:
     """Produce a published entry: authored identity + generated display fields.
 
@@ -1170,6 +1242,25 @@ def bake_entry(
         source.pop("manifestFrom", None)
     else:
         source["ref"] = commit
+        if tag:
+            # The release the pin came from, for display and provenance only.
+            # The commit above stays the sole fetch/verify coordinate: a tag can
+            # be force-moved after publish, so a client honouring it would trade
+            # an immutable pin for a mutable pointer.
+            #
+            # Held to the published-schema constraints HERE, not just at the
+            # final document check: that check refuses the whole catalog, so one
+            # repository's freakish tag name (overlong, embedded whitespace)
+            # would withhold every app. The pin is unaffected -- the entry just
+            # publishes without a release name, and the run says why.
+            if _publishable_source_tag(tag):
+                source["sourceTag"] = tag
+            else:
+                findings.warn(
+                    f"{name}: resolved tag {tag[:80]!r} is not publishable as "
+                    f"sourceTag (must be 1-255 chars with no whitespace or NUL); "
+                    f"publishing the commit pin without a release name"
+                )
 
     entry: dict[str, Any] = {"name": name, "source": source}
 
@@ -1388,7 +1479,7 @@ def content_digest(payload: dict[str, Any]) -> str:
 
 def build_registry(
     authored: dict[str, Any],
-    resolver: Callable[[str, str], str],
+    resolver: Callable[[str, str], "str | ResolvedPin"],
     fetcher: Callable[..., dict[str, Any]],
     now: datetime,
     findings: Findings,
@@ -1405,12 +1496,16 @@ def build_registry(
         # client's inventory -- so the manifest is read from the repository the
         # curator names in `manifestFrom`, which never reaches the published doc.
         origin = source["manifestFrom"] if source.get("type") == "builtin" else source
-        commit = resolver(origin["url"], origin["ref"])
-        manifest = fetcher(origin["url"], commit, origin.get("subdir"))
+        resolved = resolver(origin["url"], origin["ref"])
+        # A plain-string resolver (the dry-run lambda, tests, and any older
+        # caller) still works: a bare commit is a pin with no tag provenance.
+        pin = resolved if isinstance(resolved, ResolvedPin) else ResolvedPin(resolved)
+        manifest = fetcher(origin["url"], pin.commit, origin.get("subdir"))
         apps.append(
             bake_entry(
-                authored_entry, manifest, commit, findings,
+                authored_entry, manifest, pin.commit, findings,
                 assets, heroes, hero_details, shots, stars_fetcher,
+                tag=pin.tag,
             )
         )
 
@@ -1671,7 +1766,7 @@ def publish(
     authored_order = json.loads(order_path.read_text(encoding="utf-8"))
     now = datetime.now(timezone.utc)
 
-    resolver: Callable[[str, str], str]
+    resolver: Callable[[str, str], "str | ResolvedPin"]
     fetcher: Callable[..., dict[str, Any]]
     stars_fetcher: Callable[[str], int | None] | None
     assets: IconAssets | None
@@ -1691,7 +1786,7 @@ def publish(
         shots = None
         art = None
     else:
-        resolver, fetcher = resolve_commit, fetch_manifest
+        resolver, fetcher = resolve_pin, fetch_manifest
         stars_fetcher = budgeted_stars_fetcher()
         assets = IconAssets(fetch_blob, blob_size)
         heroes = HeroAssets(fetch_blob, blob_size)

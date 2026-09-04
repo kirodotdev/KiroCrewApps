@@ -169,6 +169,119 @@ def test_unknown_ref_fails(tmp_path, allow_local_urls):
         publish.resolve_commit(str(repo), "no-such-branch")
 
 
+def test_resolve_pin_remembers_the_tag(tmp_path, allow_local_urls):
+    """A tag ref resolves to (commit, tag): the pin stays immutable, the tag is
+    kept as the release name the pin came from."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1.2.0", "-m", "v1.2.0", cwd=repo)
+    pin = publish.resolve_pin(str(repo), "v1.2.0")
+    assert pin.commit == commit
+    assert pin.tag == "v1.2.0"
+
+
+def test_resolve_pin_lightweight_tag_also_remembered(tmp_path, allow_local_urls):
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "lw-tag", cwd=repo)
+    pin = publish.resolve_pin(str(repo), "lw-tag")
+    assert pin.commit == commit
+    assert pin.tag == "lw-tag"
+
+
+def test_resolve_pin_branch_has_no_tag(tmp_path, allow_local_urls):
+    """Tag-ness comes from WHICH ref matched, not from what the name looks
+    like: a branch named like a version is still a branch."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("branch", "v9.9.9", cwd=repo)
+    assert publish.resolve_pin(str(repo), "main") == publish.ResolvedPin(commit, None)
+    assert publish.resolve_pin(str(repo), "v9.9.9") == publish.ResolvedPin(commit, None)
+
+
+def test_resolve_pin_commit_passthrough_has_no_tag():
+    sha = "a" * 40
+    assert publish.resolve_pin("https://example.invalid/x.git", sha) == publish.ResolvedPin(
+        sha, None
+    )
+
+
+def test_resolve_pin_prefers_tag_over_same_named_branch(tmp_path, allow_local_urls):
+    """When `v1` exists as both a tag and a branch, the existing resolution
+    order picks the tag -- so the provenance must say tag as well."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1", "-m", "v1", cwd=repo)
+    git("branch", "v1", cwd=repo)
+    pin = publish.resolve_pin(str(repo), "v1")
+    assert pin.commit == commit
+    assert pin.tag == "v1"
+
+
+def test_resolve_pin_wildcard_ref_publishes_the_matched_tag_not_the_pattern(
+    tmp_path, allow_local_urls
+):
+    """`ls-remote` accepts glob patterns, so `v1.*` matching one lightweight tag
+    reaches the single-candidate fallback. The published sourceTag must be the
+    tag that MATCHED, never the pattern the curator typed -- a signed document
+    naming release `v1.*` names a release that does not exist."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "v1.2.0", cwd=repo)
+    pin = publish.resolve_pin(str(repo), "v1.*")
+    assert pin.commit == commit
+    assert pin.tag == "v1.2.0"
+
+
+def test_resolve_pin_wildcard_matching_annotated_tag_peels_and_names_it(
+    tmp_path, allow_local_urls
+):
+    """An annotated tag matched via glob returns two candidate lines (`v1.2.0`
+    and `v1.2.0^{}`); the fallback collapses the pair onto the peeled commit
+    and names the clean tag."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1.2.0", "-m", "v1.2.0", cwd=repo)
+    pin = publish.resolve_pin(str(repo), "v1.*")
+    assert pin.commit == commit
+    assert pin.tag == "v1.2.0"
+
+
+def test_resolve_pin_fully_qualified_annotated_tag_peels_and_strips_namespace(
+    tmp_path, allow_local_urls
+):
+    """`refs/tags/v1` written verbatim matches its own RAW ref, which for an
+    annotated tag names the TAG OBJECT -- the pin must still be the peeled
+    commit (a tag-object pin halts publishing at the object-type check), and
+    sourceTag must not leak the `refs/tags/` namespace."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1", "-m", "v1", cwd=repo)
+    tag_object = git("rev-parse", "v1", cwd=repo)
+    assert tag_object != commit, "fixture must use an annotated tag"
+
+    pin = publish.resolve_pin(str(repo), "refs/tags/v1")
+    assert pin.commit == commit, "must peel to the commit, not the tag object"
+    assert pin.tag == "v1", "namespace must be stripped from the published name"
+
+
+def test_resolve_pin_fully_qualified_lightweight_tag(tmp_path, allow_local_urls):
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "lw", cwd=repo)
+    pin = publish.resolve_pin(str(repo), "refs/tags/lw")
+    assert pin.commit == commit
+    assert pin.tag == "lw"
+
+
+def test_resolve_pin_fully_qualified_branch_has_no_tag(tmp_path, allow_local_urls):
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    pin = publish.resolve_pin(str(repo), "refs/heads/main")
+    assert pin.commit == commit
+    assert pin.tag is None
+
+
 @pytest.mark.parametrize(
     "url", ["ext::sh -c id", "file:///etc/passwd", "--upload-pack=/bin/sh", "git@h:a/b.git"]
 )
@@ -242,6 +355,7 @@ def test_bakes_generated_fields():
     entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings)
 
     assert entry["source"]["ref"] == "a" * 40, "the pin must be the resolved commit"
+    assert "sourceTag" not in entry["source"], "a branch ref carries no release name"
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
     assert entry["author"] == {"name": "Demo Labs"}
@@ -724,6 +838,137 @@ def test_built_document_satisfies_the_published_schema(tmp_path, allow_local_url
     out = Findings()
     check_schema(doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out)
     assert out.errors == [], out.errors
+
+
+def test_publishing_from_a_tag_records_source_tag(tmp_path, allow_local_urls):
+    """The release workflow end to end: a curator names a tag, the published
+    entry pins the commit AND says which release the pin came from."""
+    repo = tmp_path / "repo"
+    commit = make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1.2.0", "-m", "v1.2.0", cwd=repo)
+
+    authored_doc = {"schemaVersion": 1, "apps": [authored(url=str(repo), ref="v1.2.0")]}
+    findings = Findings()
+    doc = publish.build_registry(
+        authored_doc, publish.resolve_pin, publish.fetch_manifest,
+        publish.datetime.now(publish.timezone.utc), findings,
+    )
+    assert findings.errors == []
+    source = doc["apps"][0]["source"]
+    assert source["ref"] == commit, "the pin is still the immutable commit"
+    assert source["sourceTag"] == "v1.2.0"
+
+    # And the result is a legal published document (https swap as above).
+    source["url"] = "https://example.com/demo-app.git"
+    from validate import check_schema
+    out = Findings()
+    check_schema(doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out)
+    assert out.errors == [], out.errors
+
+
+def test_publishing_from_a_branch_emits_no_source_tag(tmp_path, allow_local_urls):
+    repo = tmp_path / "repo"
+    make_repo(repo, MANIFEST)
+    authored_doc = {"schemaVersion": 1, "apps": [authored(url=str(repo), ref="main")]}
+    findings = Findings()
+    doc = publish.build_registry(
+        authored_doc, publish.resolve_pin, publish.fetch_manifest,
+        publish.datetime.now(publish.timezone.utc), findings,
+    )
+    assert findings.errors == []
+    assert "sourceTag" not in doc["apps"][0]["source"]
+
+
+@pytest.mark.parametrize(
+    "bad_tag",
+    [
+        5,  # non-string
+        True,  # non-string (bool)
+        "",  # empty -- omit the field instead
+        "v1 2",  # whitespace
+        "v1\t2",  # whitespace (tab)
+        "v1\u0000",  # NUL
+        "x" * 256,  # overlong (max 255)
+    ],
+)
+def test_published_schema_rejects_malformed_source_tag(bad_tag, tmp_path, allow_local_urls):
+    """Pin the published-schema constraints on sourceTag itself: this document
+    is signed, so a field that renders in the store must not admit control
+    characters, whitespace padding, or unbounded length."""
+    doc, findings, commit = build({"schemaVersion": 1, "apps": [authored()]}, tmp_path)
+    assert findings.errors == []
+    source = doc["apps"][0]["source"]
+    source["url"] = "https://example.com/demo-app.git"
+    source["sourceTag"] = bad_tag
+
+    from validate import check_schema
+    out = Findings()
+    check_schema(doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out)
+    assert out.errors, f"schema must reject sourceTag {bad_tag!r}"
+
+
+def test_published_schema_accepts_a_well_formed_source_tag(tmp_path, allow_local_urls):
+    doc, findings, commit = build({"schemaVersion": 1, "apps": [authored()]}, tmp_path)
+    source = doc["apps"][0]["source"]
+    source["url"] = "https://example.com/demo-app.git"
+    source["sourceTag"] = "v1.2.0"
+
+    from validate import check_schema
+    out = Findings()
+    check_schema(doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out)
+    assert out.errors == [], out.errors
+
+
+def test_bake_entry_records_source_tag_for_git_only():
+    findings = Findings()
+    entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings, tag="v2.0")
+    assert entry["source"]["sourceTag"] == "v2.0"
+
+
+@pytest.mark.parametrize("bad_tag", ["x" * 256, "v1 2", "v1\t2", "v1\u00002"])
+def test_bake_entry_degrades_an_unpublishable_tag_to_a_warning(bad_tag):
+    """One repository's freakish tag name must cost that entry its release
+    label, never the whole catalog: the final schema check refuses the entire
+    document, so an overlong/whitespace tag reaching it would withhold every
+    app. The pin is unaffected."""
+    findings = Findings()
+    entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings, tag=bad_tag)
+    assert entry["source"]["ref"] == "a" * 40, "the pin must survive"
+    assert "sourceTag" not in entry["source"]
+    assert findings.errors == []
+    assert any("not publishable as" in w for w in findings.warnings)
+
+
+def test_bake_entry_accepts_a_255_char_tag_boundary():
+    findings = Findings()
+    entry = publish.bake_entry(authored(), MANIFEST, "a" * 40, findings, tag="x" * 255)
+    assert entry["source"]["sourceTag"] == "x" * 255
+    assert not any("not publishable" in w for w in findings.warnings)
+
+
+def test_builtin_never_carries_a_source_tag():
+    """A builtin publishes no fetch coordinates at all, so a tag on the
+    manifestFrom repo has nothing to attach to."""
+    findings = Findings()
+    entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, findings, tag="v2.0")
+    assert "sourceTag" not in entry["source"]
+
+
+def test_authored_source_tag_is_rejected():
+    """`sourceTag` is generated, never authored -- additionalProperties:false on
+    the authored source is what machine-checks that, so pin the behaviour."""
+    from validate import check_schema
+
+    entry = authored()
+    entry["source"]["sourceTag"] = "v1"
+    out = Findings()
+    check_schema(
+        {"schemaVersion": 1, "apps": [entry]},
+        publish.SCHEMA_DIR / "authored-registry.schema.json",
+        "authored",
+        out,
+    )
+    assert out.errors, "an authored sourceTag must fail validation"
 
 
 def test_annotated_tag_resolves_to_a_commit_not_the_tag_object(tmp_path, allow_local_urls):
