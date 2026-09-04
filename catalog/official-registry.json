@@ -466,6 +466,23 @@
         "other"
       ],
       "note": "AI-narrated life simulator; public repo, individual author. Ships three app agents plus an MCP server, and its onInstall step installs optional art dependencies."
+    },
+    {
+      "name": "todo-txt",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/LeTeutz/todo-txt",
+        "ref": "38770920da964c89252384dbe29ac998b3ffde12"
+      },
+      "author": {
+        "name": "LeTeutz",
+        "url": "https://github.com/LeTeutz",
+        "kind": "person"
+      },
+      "categories": [
+        "productivity"
+      ],
+      "note": "Plain-text todo.txt manager over a local file; public repo, individual author. Backend and UI only, no skills and no install hooks."
     }
   ],
   "removed": [],
