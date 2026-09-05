@@ -43,6 +43,7 @@ import sys
 import tempfile
 import time
 import unicodedata
+import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -82,6 +83,92 @@ STARS_TIMEOUT = 10
 GITHUB_REPO_RE = re.compile(
     r"^https://github\.com/([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?/?$"
 )
+
+#: Per-asset download budget for a `release` entry. Unlike a star count, the
+#: asset digest is load-bearing (it is the install's trust anchor), so the
+#: timeout is generous -- but still bounded, because build_registry() walks
+#: entries serially and one stalled CDN must not outlive the CI job.
+RELEASE_ASSET_TIMEOUT = 120
+#: Hard cap on a release asset's size. A store app's built bundle is a few MB;
+#: the cap exists so a hostile or misconfigured entry cannot make publish
+#: stream gigabytes. Enforced on the BYTES ACTUALLY READ, never trusted from
+#: Content-Length, which a server can omit or understate.
+RELEASE_ASSET_MAX_BYTES = 100 * 1024 * 1024
+#: Read granularity for the streaming digest. The asset is hashed as it
+#: arrives and never held in memory whole.
+_ASSET_CHUNK_BYTES = 1024 * 1024
+
+
+def release_asset_url(repo_url: str, tag: str, asset: str) -> str:
+    """The canonical GitHub download URL for one release asset.
+
+    Derived, never authored: the curator states repo + tag + asset name, and
+    this is the one place that turns those into a URL, so a published archive
+    entry can never point anywhere except the stated repository's own releases.
+    Raises for a non-GitHub repo URL -- other forges shape their release
+    download URLs differently, and guessing would publish a dead link.
+
+    Tag and asset are percent-encoded with NO safe characters: the schema
+    already forbids whitespace and slashes, but encoding is what guarantees the
+    two path segments cannot alter the URL's structure regardless of what a
+    future schema revision admits.
+    """
+    match = GITHUB_REPO_RE.match(repo_url)
+    if not match:
+        raise PublishError(
+            f"release entries require a github.com repository URL "
+            f"(got {repo_url!r}); other forges are not supported yet"
+        )
+    owner, repo = match.group(1), match.group(2)
+    quoted_tag = urllib.parse.quote(tag, safe="")
+    quoted_asset = urllib.parse.quote(asset, safe="")
+    return (
+        f"https://github.com/{owner}/{repo}/releases/download/"
+        f"{quoted_tag}/{quoted_asset}"
+    )
+
+
+def fetch_asset_sha256(url: str) -> str:
+    """Download *url* and return its SHA-256, streaming with a hard size cap.
+
+    This digest is what the catalog signs and what every client install
+    verifies fail-closed, so unlike the star fetch this MUST raise on any
+    failure -- publishing an archive entry whose digest could not be computed
+    would be publishing an unpinned install. GitHub asset downloads redirect to
+    a CDN host; the redirect is followed, and the size cap applies to the bytes
+    actually received wherever they come from.
+    """
+    if not url.startswith("https://"):
+        raise PublishError(f"release asset URL must be https: {url!r}")
+    request = urllib.request.Request(
+        url, headers={"User-Agent": "kirocrew-apps-publish"}
+    )
+    digest = hashlib.sha256()
+    total = 0
+    try:
+        with urllib.request.urlopen(request, timeout=RELEASE_ASSET_TIMEOUT) as response:
+            while True:
+                chunk = response.read(_ASSET_CHUNK_BYTES)
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > RELEASE_ASSET_MAX_BYTES:
+                    raise PublishError(
+                        f"release asset exceeds the "
+                        f"{RELEASE_ASSET_MAX_BYTES // (1024 * 1024)} MB cap: {url}"
+                    )
+                digest.update(chunk)
+    except PublishError:
+        raise
+    except Exception as exc:
+        raise PublishError(f"failed to download release asset {url}: {exc}") from exc
+    if total == 0:
+        # A zero-byte asset is a broken upload, not a plausible app bundle.
+        # Its digest is also a well-known constant, so signing it would pin
+        # nothing anyone meant to ship.
+        raise PublishError(f"release asset is empty: {url}")
+    return digest.hexdigest()
+
 
 # Hardening for git invocations against remotes we do not control. The schema
 # already restricts `url` to https, but this is the layer that actually executes
@@ -1213,6 +1300,8 @@ def bake_entry(
     stars_fetcher: Callable[[str], int | None] | None = None,
     *,
     tag: str | None = None,
+    asset_url: str | None = None,
+    asset_sha256: str | None = None,
 ) -> dict[str, Any]:
     """Produce a published entry: authored identity + generated display fields.
 
@@ -1240,6 +1329,20 @@ def bake_entry(
         # a clone target for code they already have. Same curator-only-then-
         # stripped pattern as `note`.
         source.pop("manifestFrom", None)
+    elif source.get("type") == "release":
+        # A release entry publishes as the ARCHIVE variant -- but the swap is
+        # DEFERRED to the end of this function (see below): every ingester in
+        # between (icon, hero, screenshots, stars) reads the REPOSITORY url
+        # from `source["url"]`, and replacing it here would hand them the asset
+        # download URL as a git remote, silently dropping the app's artwork
+        # from the signed storefront. `asset_sha256` is validated up front
+        # because there is no honest fallback: an archive entry without a
+        # digest would tell clients to run whatever the URL serves tomorrow.
+        if not asset_sha256 or not asset_url:
+            raise PublishError(
+                f"{name}: release entry reached bake without a resolved asset "
+                f"digest -- refusing to publish an unpinned archive"
+            )
     else:
         source["ref"] = commit
         if tag:
@@ -1327,12 +1430,13 @@ def bake_entry(
     if version := manifest_str(manifest, "version"):
         entry["version"] = version[:64]
 
-    # Star counts are GENERATED, never authored, and only a git source has a
-    # repository to count stars on -- a builtin ships in the client and never
-    # touches the network here. A missing count publishes NO field: absence
-    # means "unknown", and writing 0 (or a stale prior value) would state a
-    # popularity fact this run has no evidence for.
-    if source.get("type") == "git" and stars_fetcher is not None:
+    # Star counts are GENERATED, never authored, and only a source with a
+    # repository has stars to count -- git and release entries both name one
+    # (a release entry's `url` IS its GitHub repo); a builtin ships in the
+    # client and never touches the network here. A missing count publishes NO
+    # field: absence means "unknown", and writing 0 (or a stale prior value)
+    # would state a popularity fact this run has no evidence for.
+    if source.get("type") in ("git", "release") and stars_fetcher is not None:
         stars = stars_fetcher(source["url"])
         if stars is not None:
             entry["stargazersCount"] = stars
@@ -1459,6 +1563,20 @@ def bake_entry(
         if hosted:
             entry["screenshotRefs"] = hosted
 
+    if authored["source"].get("type") == "release":
+        # The deferred swap (see the release branch above): every ingester has
+        # now read the repository URL it needed, so the published source can
+        # become the archive coordinates -- the derived asset URL plus the
+        # digest THIS run computed. The digest is the trust anchor: a GitHub
+        # release asset can be deleted and re-uploaded with the same name, so
+        # the URL alone pins nothing.
+        archive: dict[str, Any] = {
+            "type": "archive", "url": asset_url, "sha256": asset_sha256,
+        }
+        if tag and _publishable_source_tag(tag):
+            archive["sourceTag"] = tag
+        entry["source"] = archive
+
     return entry
 
 
@@ -1488,6 +1606,7 @@ def build_registry(
     hero_details: HeroDetailAssets | None = None,
     shots: ScreenshotAssets | None = None,
     stars_fetcher: Callable[[str], int | None] | None = None,
+    asset_digester: Callable[[str], str] | None = None,
 ) -> dict[str, Any]:
     apps: list[dict[str, Any]] = []
     for authored_entry in authored.get("apps") or []:
@@ -1496,16 +1615,45 @@ def build_registry(
         # client's inventory -- so the manifest is read from the repository the
         # curator names in `manifestFrom`, which never reaches the published doc.
         origin = source["manifestFrom"] if source.get("type") == "builtin" else source
-        resolved = resolver(origin["url"], origin["ref"])
+        # A release entry's manifest and art come from the git repository AT THE
+        # RELEASE TAG -- the same source tree the release was cut from -- so the
+        # display fields cannot drift from the bytes the asset carries. Only the
+        # install coordinates differ: the published source is the asset URL +
+        # digest, not a clone target.
+        is_release = source.get("type") == "release"
+        ref = source["tag"] if is_release else origin["ref"]
+        resolved = resolver(origin["url"], ref)
         # A plain-string resolver (the dry-run lambda, tests, and any older
         # caller) still works: a bare commit is a pin with no tag provenance.
         pin = resolved if isinstance(resolved, ResolvedPin) else ResolvedPin(resolved)
         manifest = fetcher(origin["url"], pin.commit, origin.get("subdir"))
+        asset_url = asset_sha256 = None
+        release_tag: str | None = None
+        if is_release:
+            # The asset URL must name the tag the resolver actually SELECTED:
+            # an authored pattern like `v1.*` resolves to a concrete tag, and
+            # deriving the URL from the authored spelling would percent-encode
+            # the wildcard and request a nonexistent asset path. A plain-string
+            # resolver carries no tag provenance, so the authored tag (already
+            # an exact name in that offline path) stands in.
+            release_tag = pin.tag if isinstance(resolved, ResolvedPin) else source["tag"]
+            if not release_tag:
+                raise PublishError(
+                    f"release source for {origin['url']}: tag {source['tag']!r} "
+                    "did not resolve to a concrete tag"
+                )
+            asset_url = release_asset_url(source["url"], release_tag, source["asset"])
+            asset_sha256 = (asset_digester or fetch_asset_sha256)(asset_url)
         apps.append(
             bake_entry(
                 authored_entry, manifest, pin.commit, findings,
                 assets, heroes, hero_details, shots, stars_fetcher,
-                tag=pin.tag,
+                # The RESOLVED tag is the release identity: it is the exact
+                # name the asset URL was derived from, so the published
+                # sourceTag can never disagree with the bytes the URL serves.
+                tag=release_tag if is_release else pin.tag,
+                asset_url=asset_url,
+                asset_sha256=asset_sha256,
             )
         )
 
@@ -1778,6 +1926,9 @@ def publish(
         # Enough to exercise stamping and schema conformance offline. Publishing
         # for real must never take this path, hence the separate flag.
         resolver = lambda url, ref: ref if COMMIT_RE.match(ref) else "0" * 40  # noqa: E731
+        # Same offline stance as the resolver: a dry run must not touch the
+        # network, so a release asset gets a placeholder digest.
+        asset_digester = lambda url: "0" * 64  # noqa: E731
         fetcher = lambda url, commit, subdir=None: {}  # noqa: E731
         stars_fetcher = None
         assets = None
@@ -1787,6 +1938,7 @@ def publish(
         art = None
     else:
         resolver, fetcher = resolve_pin, fetch_manifest
+        asset_digester = fetch_asset_sha256
         stars_fetcher = budgeted_stars_fetcher()
         assets = IconAssets(fetch_blob, blob_size)
         heroes = HeroAssets(fetch_blob, blob_size)
@@ -1798,6 +1950,7 @@ def publish(
         registry_doc = build_registry(
             authored_registry, resolver, fetcher, now, findings,
             assets, heroes, hero_details, shots, stars_fetcher,
+            asset_digester=asset_digester,
         )
     except PublishError as exc:
         findings.error(str(exc))

@@ -88,8 +88,40 @@
       "type": "object",
       "oneOf": [
         { "$ref": "#/$defs/authoredSourceGit" },
+        { "$ref": "#/$defs/authoredSourceRelease" },
         { "$ref": "#/$defs/authoredSourceBuiltin" }
       ]
+    },
+
+    "authoredSourceRelease": {
+      "title": "release -- install from a published release asset",
+      "description": "An app whose install bytes come from a PREBUILT artifact attached to a GitHub release, not from cloning source. The curator states the repository, the release tag, and the asset filename; the publish pipeline derives the one canonical download URL, streams the asset to compute its SHA-256, and publishes the ARCHIVE variant with that digest -- so the signed document pins the exact bytes, and a re-uploaded asset with the same name fails verification at install rather than executing. Display fields and art are still read from the git repository at the release tag, so what the store shows cannot drift from the release the asset was built from. GitHub-only in v1: other forges shape release download URLs differently, and a guessed URL would publish a dead link.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "url", "tag", "asset"],
+      "properties": {
+        "type": { "const": "release" },
+        "url": {
+          "description": "The app's GitHub repository -- both where the release lives and where publish reads app.json/art at the tag. https only, same execution-vector reasoning as the git variant.",
+          "type": "string",
+          "pattern": "^https://github\\.com/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?(?:\\.git)?/?$",
+          "maxLength": 2048
+        },
+        "tag": {
+          "description": "The release's git tag, verbatim (e.g. v1.2.0). Resolved to a commit for reading display fields, published as `sourceTag`, and embedded (percent-encoded) in the derived download URL. No whitespace, no slash: a slash would add a path segment to the derived URL.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\u0000\\s/]+$"
+        },
+        "asset": {
+          "description": "The release asset's filename, verbatim as uploaded. A contained name only: no path separators, no '..', no NUL -- this value becomes one URL path segment and, on the client, a filename.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^(?!\\.\\.?$)(?!.*\\.\\.)(?!.*[/\\\\])[^\\u0000\\s]+$"
+        }
+      }
     },
 
     "authoredSourceBuiltin": {
