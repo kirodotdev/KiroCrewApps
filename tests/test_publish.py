@@ -2761,3 +2761,330 @@ class TestBudgetedStarsFetcher:
         monkeypatch.setattr(publish.time, "monotonic", lambda: next(clock))
         fetch = publish.budgeted_stars_fetcher()
         assert fetch("https://github.com/o/r") == 7
+
+
+# --------------------------------------------------------------------------
+# release entries: publish a prebuilt asset pinned by digest (#44 phase 1)
+# --------------------------------------------------------------------------
+
+
+def authored_release(name="demo-app", url="https://github.com/octo/demo-app",
+                     tag="v1.2.0", asset="demo-app-dist.tar.gz"):
+    return {
+        "name": name,
+        "source": {"type": "release", "url": url, "tag": tag, "asset": asset},
+    }
+
+
+def test_authored_schema_accepts_a_release_entry():
+    from validate import check_schema
+    out = Findings()
+    check_schema(
+        {"schemaVersion": 1, "apps": [authored_release()]},
+        publish.SCHEMA_DIR / "authored-registry.schema.json",
+        "authored",
+        out,
+    )
+    assert out.errors == [], out.errors
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"url": "https://gitlab.com/o/r"},  # non-GitHub forge
+        {"tag": "v1/2"},  # slash would add a URL path segment
+        {"tag": "v1 2"},  # whitespace
+        {"tag": ""},  # empty
+        {"tag": "x" * 256},  # over the 255 bound
+        {"asset": "dist/app.tar.gz"},  # path separator
+        {"asset": "..\u002e"},  # dot-dot spelling
+        {"asset": ".."},
+        {"asset": ""},  # empty
+        {"asset": "x" * 256},  # over the 255 bound
+        {"sha256": "a" * 64},  # digest is generated, never authored
+    ],
+)
+def test_authored_schema_rejects_malformed_release_entries(patch):
+    from validate import check_schema
+    entry = authored_release()
+    entry["source"].update(patch)
+    out = Findings()
+    check_schema(
+        {"schemaVersion": 1, "apps": [entry]},
+        publish.SCHEMA_DIR / "authored-registry.schema.json",
+        "authored",
+        out,
+    )
+    assert out.errors, f"schema must reject {patch!r}"
+
+
+def test_release_asset_url_is_derived_and_percent_encoded():
+    url = publish.release_asset_url(
+        "https://github.com/octo/demo-app.git", "v1.2.0", "demo app%.tar.gz"
+    )
+    assert url == (
+        "https://github.com/octo/demo-app/releases/download/"
+        "v1.2.0/demo%20app%25.tar.gz"
+    )
+
+
+def test_release_asset_url_refuses_non_github():
+    with pytest.raises(publish.PublishError, match="github.com"):
+        publish.release_asset_url("https://example.com/o/r.git", "v1", "a.tar.gz")
+
+
+def test_release_entry_publishes_as_a_digest_pinned_archive(
+    tmp_path, allow_local_urls, monkeypatch
+):
+    """End to end: the published source is the ARCHIVE variant carrying the
+    derived URL, the digest THIS run computed, and the release tag -- and the
+    document satisfies the published schema."""
+    repo = tmp_path / "repo"
+    make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1.2.0", "-m", "v1.2.0", cwd=repo)
+
+    entry = authored_release(url=str(repo))
+    # The fixture repo is local, so stand in for GitHub URL derivation; the
+    # real deriver's GitHub-only refusal is pinned by its own tests below.
+    canned = "https://github.com/octo/demo-app/releases/download/v1.2.0/demo-app-dist.tar.gz"
+    monkeypatch.setattr(publish, "release_asset_url", lambda u, t, a: canned)
+    digested: list[str] = []
+
+    def digester(url: str) -> str:
+        digested.append(url)
+        return "ab" * 32
+
+    findings = Findings()
+    doc = publish.build_registry(
+        {"schemaVersion": 1, "apps": [entry]},
+        publish.resolve_pin, publish.fetch_manifest,
+        publish.datetime.now(publish.timezone.utc), findings,
+        asset_digester=digester,
+    )
+    assert findings.errors == []
+    source = doc["apps"][0]["source"]
+    assert source["type"] == "archive"
+    assert source["url"] == canned
+    assert source["sha256"] == "ab" * 32
+    assert source["sourceTag"] == "v1.2.0"
+    assert "ref" not in source, "an archive entry has no git pin"
+    assert digested == [canned], "the digest must be computed over the derived URL"
+    # Display fields still came from the git repo at the tag.
+    assert doc["apps"][0]["displayName"] == "Demo App"
+
+    from validate import check_schema
+    out = Findings()
+    check_schema(doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out)
+    assert out.errors == [], out.errors
+
+
+def test_release_entry_with_non_github_url_fails_url_derivation(
+    tmp_path, allow_local_urls
+):
+    """A release entry's url must be a GitHub repo: a non-GitHub url fails at
+    URL derivation with a clear error rather than publishing a guessed link."""
+    repo = tmp_path / "repo"
+    make_repo(repo, MANIFEST)
+    git("tag", "v1.2.0", cwd=repo)
+    with pytest.raises(publish.PublishError, match="github.com"):
+        publish.build_registry(
+            {"schemaVersion": 1, "apps": [authored_release(url=str(repo))]},
+            publish.resolve_pin, publish.fetch_manifest,
+            publish.datetime.now(publish.timezone.utc), Findings(),
+            asset_digester=lambda url: "ab" * 32,
+        )
+
+
+def test_bake_entry_refuses_a_release_without_a_digest():
+    """The fail-closed invariant: no digest, no archive entry -- never an
+    unpinned URL in a signed document."""
+    findings = Findings()
+    with pytest.raises(publish.PublishError, match="unpinned"):
+        publish.bake_entry(
+            authored_release(), MANIFEST, "a" * 40, findings,
+            tag="v1.2.0", asset_url="https://github.com/o/r/releases/download/v1.2.0/a.tar.gz",
+            asset_sha256=None,
+        )
+
+
+def test_release_asset_url_uses_the_resolved_tag_not_the_authored_pattern(
+    tmp_path, allow_local_urls, monkeypatch
+):
+    """An authored wildcard like `v1.*` resolves to a concrete tag; the asset
+    URL and sourceTag must carry THAT tag -- deriving from the authored
+    spelling would percent-encode the wildcard and request a dead path."""
+    repo = tmp_path / "repo"
+    make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1.2.0", "-m", "v1.2.0", cwd=repo)
+
+    entry = authored_release(url=str(repo))
+    entry["source"]["tag"] = "v1.*"
+    derived: list[tuple[str, str]] = []
+
+    def fake_url(u: str, t: str, a: str) -> str:
+        derived.append((t, a))
+        return f"https://github.com/octo/demo-app/releases/download/{t}/{a}"
+
+    monkeypatch.setattr(publish, "release_asset_url", fake_url)
+    findings = Findings()
+    doc = publish.build_registry(
+        {"schemaVersion": 1, "apps": [entry]},
+        publish.resolve_pin, publish.fetch_manifest,
+        publish.datetime.now(publish.timezone.utc), findings,
+        asset_digester=lambda url: "ab" * 32,
+    )
+    assert findings.errors == []
+    assert derived == [("v1.2.0", "demo-app-dist.tar.gz")], (
+        "the URL must be derived from the RESOLVED tag, never the pattern"
+    )
+    source = doc["apps"][0]["source"]
+    assert "v1.2.0" in source["url"] and "*" not in source["url"]
+    assert source["sourceTag"] == "v1.2.0"
+
+
+def test_release_entry_refuses_a_ref_with_no_tag_provenance(
+    tmp_path, allow_local_urls
+):
+    """A release ref that resolves without tag provenance (e.g. a branch name)
+    fails closed: there is no tag to derive the asset URL from."""
+    repo = tmp_path / "repo"
+    make_repo(repo, MANIFEST)
+    git("tag", "-a", "v1.2.0", "-m", "v1.2.0", cwd=repo)
+
+    entry = authored_release(url=str(repo))
+
+    def resolver(url: str, ref: str) -> publish.ResolvedPin:
+        return publish.ResolvedPin("a" * 40)  # commit found, no tag matched
+
+    with pytest.raises(publish.PublishError, match="concrete tag"):
+        publish.build_registry(
+            {"schemaVersion": 1, "apps": [entry]},
+            resolver, lambda url, commit, subdir=None: dict(MANIFEST),
+            publish.datetime.now(publish.timezone.utc), Findings(),
+            asset_digester=lambda url: "ab" * 32,
+        )
+
+
+def test_release_entry_ingests_art_from_the_repository_not_the_asset_url():
+    """Regression pin: the release->archive swap is deferred past every
+    ingester, so icon ingestion and the star fetch read the REPOSITORY url --
+    handing them the asset download URL as a git remote silently dropped the
+    app's artwork from the signed storefront."""
+    seen_urls: list[str] = []
+
+    class SpyAssets:
+        def add(self, url, commit, ref, name, findings):
+            seen_urls.append(url)
+            return "assets/icons/" + "c" * 64 + ".png"
+
+    manifest = dict(MANIFEST)
+    manifest.pop("iconUrl", None)
+    manifest["iconPath"] = "ui/icon.png"
+
+    star_urls: list[str] = []
+
+    def stars(url):
+        star_urls.append(url)
+        return 5
+
+    repo_url = "https://github.com/octo/demo-app"
+    findings = Findings()
+    entry = publish.bake_entry(
+        authored_release(url=repo_url), manifest, "a" * 40, findings,
+        assets=SpyAssets(), stars_fetcher=stars,
+        tag="v1.2.0",
+        asset_url="https://github.com/octo/demo-app/releases/download/v1.2.0/a.tar.gz",
+        asset_sha256="ab" * 32,
+    )
+    assert seen_urls == [repo_url], "icon ingestion must see the git repo, not the asset"
+    assert star_urls == [repo_url]
+    assert entry["iconRef"].startswith("assets/icons/")
+    assert entry["stargazersCount"] == 5
+    # And the swap still happened -- the published source is the archive.
+    assert entry["source"] == {
+        "type": "archive",
+        "url": "https://github.com/octo/demo-app/releases/download/v1.2.0/a.tar.gz",
+        "sha256": "ab" * 32,
+        "sourceTag": "v1.2.0",
+    }
+
+
+@pytest.mark.parametrize(
+    "bad_source",
+    [
+        {"type": "archive", "url": "http://x/a.tar.gz", "sha256": "ab" * 32},  # http
+        {"type": "archive", "url": "https://x/" + "a" * 2048, "sha256": "ab" * 32},  # over 2048
+        {"type": "archive", "url": "https://x/a.tar.gz", "sha256": "ab" * 31},  # short digest
+        {"type": "archive", "url": "https://x/a.tar.gz", "sha256": "ab" * 32,
+         "sourceTag": "v1 2"},  # whitespace tag
+        {"type": "archive", "url": "https://x/a.tar.gz", "sha256": "ab" * 32,
+         "sourceTag": ""},  # empty tag -- omit the field instead
+        {"type": "archive", "url": "https://x/a.tar.gz", "sha256": "ab" * 32,
+         "sourceTag": "x" * 256},  # overlong tag
+        {"type": "archive", "url": "https://x/a.tar.gz"},  # digest missing entirely
+    ],
+)
+def test_published_schema_rejects_malformed_archive_sources(
+    bad_source, tmp_path, allow_local_urls
+):
+    """Pin the published-schema constraints on the archive variant itself:
+    https-only url, exact 64-hex digest required, sourceTag held to the same
+    shape as the git variant's."""
+    doc, findings, commit = build({"schemaVersion": 1, "apps": [authored()]}, tmp_path)
+    assert findings.errors == []
+    doc["apps"][0]["source"] = bad_source
+
+    from validate import check_schema
+    out = Findings()
+    check_schema(doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out)
+    assert out.errors, f"schema must reject {bad_source!r}"
+
+
+def test_fetch_asset_sha256_refuses_http():
+    with pytest.raises(publish.PublishError, match="https"):
+        publish.fetch_asset_sha256("http://example.com/a.tar.gz")
+
+
+class TestFetchAssetSha256:
+    def _serve(self, monkeypatch, chunks, exc=None):
+        class FakeResponse:
+            def __init__(self):
+                self._chunks = list(chunks)
+
+            def read(self, n):
+                return self._chunks.pop(0) if self._chunks else b""
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            if exc:
+                raise exc
+            return FakeResponse()
+
+        monkeypatch.setattr(publish.urllib.request, "urlopen", fake_urlopen)
+
+    def test_digest_matches_hashlib(self, monkeypatch):
+        self._serve(monkeypatch, [b"hello ", b"world"])
+        expected = publish.hashlib.sha256(b"hello world").hexdigest()
+        assert publish.fetch_asset_sha256("https://x/a.tar.gz") == expected
+
+    def test_size_cap_is_enforced_on_bytes_read(self, monkeypatch):
+        big = b"x" * publish._ASSET_CHUNK_BYTES
+        count = publish.RELEASE_ASSET_MAX_BYTES // len(big) + 2
+        self._serve(monkeypatch, [big] * count)
+        with pytest.raises(publish.PublishError, match="cap"):
+            publish.fetch_asset_sha256("https://x/a.tar.gz")
+
+    def test_empty_asset_is_refused(self, monkeypatch):
+        self._serve(monkeypatch, [])
+        with pytest.raises(publish.PublishError, match="empty"):
+            publish.fetch_asset_sha256("https://x/a.tar.gz")
+
+    def test_network_failure_raises_not_degrades(self, monkeypatch):
+        self._serve(monkeypatch, [], exc=OSError("boom"))
+        with pytest.raises(publish.PublishError, match="failed to download"):
+            publish.fetch_asset_sha256("https://x/a.tar.gz")

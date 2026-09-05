@@ -111,6 +111,7 @@ would break one of them:
 |  | Authored | Published |
 |---|---|---|
 | `source.ref` | commit, **branch, or tag** | immutable commit only |
+| `source` (release entry) | `type: release` -- repo + tag + asset name | `type: archive` -- derived URL + **SHA-256 digest** |
 | `source.sourceTag` | forbidden | present when the ref was a tag, generated |
 | Display fields (`displayName`, `summary`, `author`, `tags`, …) | **forbidden** | present, generated |
 | `generatedAt` / `revision` | forbidden | stamped by CI |
@@ -125,6 +126,16 @@ the same immutable commit pin, and the tag itself is recorded in the published
 entry as the generated `sourceTag`, so the catalog shows which release the pin
 came from. `sourceTag` is display and provenance only — a tag can be force-moved
 after publish, so nothing ever fetches or verifies by it.
+
+A **release entry** (`type: release` — repo + tag + asset filename) goes one step
+further: the app installs from a **prebuilt artifact** attached to the GitHub
+release instead of a clone. Publish derives the one canonical download URL,
+streams the asset to compute its **SHA-256**, and signs that digest into the
+published `archive` entry — the digest, not the URL, is the trust anchor, so a
+re-uploaded asset with the same name fails client verification instead of
+executing. Display fields and art are still read from the git repository at the
+tag, so what the store shows cannot drift from the release the asset was built
+from.
 Display fields are forbidden in authored input so *generated, never authored* is
 machine-checked rather than a convention someone remembers — they are baked from
 each app's own `app.json` at publish time, and therefore cannot drift from the

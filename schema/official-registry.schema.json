@@ -228,14 +228,27 @@
     },
 
     "sourceArchive": {
-      "title": "archive (reserved)",
+      "title": "archive -- a prebuilt artifact pinned by digest",
+      "description": "The published form of a curator's `release` entry. `url` is the derived download location (a GitHub release asset in v1) and `sha256` is the digest the publish pipeline computed from the bytes it streamed -- the digest, not the URL, is the trust anchor, because a release asset can be deleted and re-uploaded under the same name. A client MUST verify the digest fail-closed before unpacking or executing anything.",
       "type": "object",
       "additionalProperties": false,
       "required": ["type", "url", "sha256"],
       "properties": {
         "type": { "const": "archive" },
-        "url": { "type": "string", "format": "uri" },
-        "sha256": { "$ref": "#/$defs/sha256" }
+        "url": {
+          "description": "https only -- this URL is fetched and its payload executed after verification, so the same no-executable-strings reasoning as the git variant applies.",
+          "type": "string",
+          "pattern": "^https://[^\\u0000\\s]+$",
+          "maxLength": 2048
+        },
+        "sha256": { "$ref": "#/$defs/sha256" },
+        "sourceTag": {
+          "description": "GENERATED, display/provenance only: the release tag the asset belongs to. Never a fetch or verification coordinate -- the digest is.",
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "pattern": "^[^\\u0000\\s]+$"
+        }
       }
     },
 
