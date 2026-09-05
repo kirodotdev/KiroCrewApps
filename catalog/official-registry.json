@@ -37,6 +37,23 @@
       "note": "Community app by an individual author; already listed in the bundled seed index, curated here so the two lists agree."
     },
     {
+      "name": "agent-dashboard",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/brunokktro/agent-dashboard.git",
+        "ref": "release"
+      },
+      "author": {
+        "name": "brunokktro",
+        "url": "https://github.com/brunokktro",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Community app by an individual author. Pinned to the release branch because main deliberately tracks no build output - release is main plus one generated commit carrying frontend/dist and ui/dist, so the install needs no Node on the target machine."
+    },
+    {
       "name": "agent-worlds",
       "source": {
         "type": "builtin",
