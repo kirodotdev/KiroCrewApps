@@ -91,6 +91,24 @@
       }
     },
     {
+      "name": "aws-control",
+      "source": {
+        "type": "builtin",
+        "manifestFrom": {
+          "url": "https://github.com/kirodotdev/KiroCrew.git",
+          "ref": "67152820354de54c31713288897cf7e327e92235",
+          "subdir": "src/kiro_crew/apps/builtins/aws_control"
+        }
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "kind": "org"
+      }
+    },
+    {
       "name": "channels",
       "source": {
         "type": "builtin",
@@ -465,6 +483,24 @@
         "productivity"
       ],
       "note": "Plain-text todo.txt manager over a local file; public repo, individual author. Backend and UI only, no skills and no install hooks."
+    },
+    {
+      "name": "dynatrace",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/dynatrace-oss/dynatrace-kirocrew-app",
+        "ref": "main"
+      },
+      "author": {
+        "name": "Dynatrace",
+        "url": "https://github.com/dynatrace-oss",
+        "kind": "org"
+      },
+      "categories": [
+        "oncall-ops",
+        "developer-tools"
+      ],
+      "note": "Dynatrace (dynatrace-oss); public repo, Apache-2.0, CODEOWNERS + SUPPORT.md present. Read-only app: dtctl queries only, changes no Dynatrace state. Ships a Python backend and a 15-minute smart-rank cron, so it needs agent.apps_allow_third_party."
     }
   ],
   "removed": [],

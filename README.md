@@ -111,6 +111,7 @@ would break one of them:
 |  | Authored | Published |
 |---|---|---|
 | `source.ref` | commit, **branch, or tag** | immutable commit only |
+| `source.sourceTag` | forbidden | present when the ref was a tag, generated |
 | Display fields (`displayName`, `summary`, `author`, `tags`, …) | **forbidden** | present, generated |
 | `generatedAt` / `revision` | forbidden | stamped by CI |
 
@@ -119,6 +120,11 @@ The pin is load-bearing on the client side: an install fetches that exact commit
 and hard-fails on any mismatch (there is no branch fallback), so "revision N of
 the catalog" delivers the same bytes to every user, with the published `version`
 field — not a branch tip — carrying the update signal.
+Naming a **tag** (a release, e.g. `v1.2.0`) is the preferred form: it resolves to
+the same immutable commit pin, and the tag itself is recorded in the published
+entry as the generated `sourceTag`, so the catalog shows which release the pin
+came from. `sourceTag` is display and provenance only — a tag can be force-moved
+after publish, so nothing ever fetches or verifies by it.
 Display fields are forbidden in authored input so *generated, never authored* is
 machine-checked rather than a convention someone remembers — they are baked from
 each app's own `app.json` at publish time, and therefore cannot drift from the

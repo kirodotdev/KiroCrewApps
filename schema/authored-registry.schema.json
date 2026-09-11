@@ -148,7 +148,7 @@
           "maxLength": 2048
         },
         "ref": {
-          "description": "A commit, branch, or tag. A branch/tag is resolved to the commit it points at during publish, so the published document is always immutably pinned even though this one need not be.",
+          "description": "A commit, branch, or tag. A branch/tag is resolved to the commit it points at during publish, so the published document is always immutably pinned even though this one need not be. A tag is additionally recorded in the published entry as the generated `sourceTag`, so the catalog shows which release the pin came from -- naming the release you tagged is therefore the preferred way to publish. `sourceTag` itself is generated-only and, like every generated field, cannot be authored here.",
           "type": "string",
           "minLength": 1,
           "maxLength": 255,
