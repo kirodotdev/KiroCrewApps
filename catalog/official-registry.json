@@ -484,6 +484,23 @@
         "developer-tools"
       ],
       "note": "Dynatrace (dynatrace-oss); public repo, Apache-2.0, CODEOWNERS + SUPPORT.md present. Read-only app: dtctl queries only, changes no Dynatrace state. Ships a Python backend and a 15-minute smart-rank cron, so it needs agent.apps_allow_third_party."
+    },
+    {
+      "name": "file-review",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/jief123/file-review",
+        "ref": "v1.1.0"
+      },
+      "author": {
+        "name": "fanjie",
+        "url": "https://github.com/jief123",
+        "kind": "person"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to the v1.1.0 tag. NOT read-only: edits and writes files on the gateway host (credential paths refused on every route by the gateway's own fence) and registers in-gateway Python routes, so it needs a trust grant. No cron, no MCP."
     }
   ],
   "removed": [],
