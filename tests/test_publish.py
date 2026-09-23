@@ -2162,6 +2162,280 @@ class TestBakeEntryHostsScreenshots:
 
 
 # ---------------------------------------------------------------------------
+# A subdir app's art is read from beside its manifest, not from the repo root
+# ---------------------------------------------------------------------------
+#
+# `fetch_manifest` joins `source.subdir` before reading `app.json`, but every
+# asset that manifest named was read with the BARE manifest path, so a monorepo
+# app declaring `iconPath: "icon.png"` beside its manifest published with no
+# icon (and no hero, and no screenshots) while `git show` looked at the root.
+# The manifest keeps its app-relative meaning -- that is what the installed app
+# and the store client resolve it by -- and the READER joins the subdir.
+
+
+def recording_reader(files: dict[str, bytes]):
+    """`reader_for`, plus the exact `(url, commit, path)` each read was asked for.
+
+    Keying `files` by repository path already fails a read at the wrong path;
+    recording the call as well pins the path HANDED TO GIT, so a test can state
+    it positively rather than infer it from a miss.
+    """
+    seen: list[tuple[str, str, str]] = []
+    inner = reader_for(files)
+
+    def read(url: str, commit: str, path: str) -> bytes:
+        seen.append((url, commit, path))
+        return inner(url, commit, path)
+
+    return read, seen
+
+
+def subdir_authored(subdir: str | None):
+    entry = authored()
+    if subdir is not None:
+        entry["source"]["subdir"] = subdir
+    return entry
+
+
+def fetched_manifest(**fields):
+    """`MANIFEST` without its builtin-style absolute refs, plus *fields*.
+
+    A git source may not name an absolute location, so the shared fixture's
+    `iconUrl`/`heroImage` would each add a drop warning of their own and hide
+    the one these tests are about.
+    """
+    manifest = {k: v for k, v in MANIFEST.items() if k not in ("iconUrl", "heroImage")}
+    manifest.update(fields)
+    return manifest
+
+
+def dropped(findings: Findings) -> list[str]:
+    """Warnings that COST an asset, as opposed to advice about one that published
+    (an off-aspect hero, a card with no icon declared)."""
+    return [w for w in findings.warnings if "publishing without it" in w or "cannot" in w]
+
+
+class TestSubdirAppsReadArtBesideTheirManifest:
+    """Mutation each case catches: dropping `subdir=` from any one `.add(...)`
+    call in `bake_entry`, or reading `rel_path` instead of the joined path inside
+    `_FetchedImages.add`. Either puts the bare manifest path back in front of
+    `git show`, and the recorded path (or the miss) says so."""
+
+    def test_the_icon_and_its_dark_variant_are_read_from_the_subdir(self):
+        light, dark = png_bytes(512, 512, b"\x01" * 32), png_bytes(512, 512, b"\x02" * 32)
+        read, seen = recording_reader(
+            {"apps/beta/icon.png": light, "apps/beta/icon-dark.png": dark}
+        )
+        findings = Findings()
+        entry = publish.bake_entry(
+            subdir_authored("apps/beta"),
+            fetched_manifest(iconPath="icon.png", iconPathDark="icon-dark.png"),
+            "a" * 40,
+            findings,
+            publish.IconAssets(read),
+        )
+        assert [path for _, _, path in seen] == ["apps/beta/icon.png", "apps/beta/icon-dark.png"]
+        assert entry["iconRef"] == f"assets/icons/{hashlib.sha256(light).hexdigest()}.png"
+        assert entry["iconRefDark"] == f"assets/icons/{hashlib.sha256(dark).hexdigest()}.png"
+        assert findings.warnings == []
+
+    def test_the_size_probe_is_asked_about_the_joined_path_too(self):
+        """Sizer and reader must name the SAME blob, or the cap is enforced on
+        a file other than the one that gets buffered."""
+        data = png_bytes(512, 512)
+        sized: list[str] = []
+
+        def sizer(url, commit, path):
+            sized.append(path)
+            return len(data)
+
+        assets = publish.IconAssets(reader_for({"apps/beta/icon.png": data}), sizer)
+        entry = publish.bake_entry(
+            subdir_authored("apps/beta"), fetched_manifest(iconPath="icon.png"),
+            "a" * 40, Findings(), assets,
+        )
+        assert sized == ["apps/beta/icon.png"]
+        assert "iconRef" in entry
+
+    def test_the_hero_and_the_detail_hero_are_read_from_the_subdir(self):
+        hero, detail = png_bytes(1600, 900, b"\x03" * 32), png_bytes(2500, 600, b"\x04" * 32)
+        read, seen = recording_reader(
+            {"apps/beta/art/hero.png": hero, "apps/beta/art/detail.png": detail}
+        )
+        findings = Findings()
+        entry = publish.bake_entry(
+            subdir_authored("apps/beta"),
+            fetched_manifest(heroImage="art/hero.png", heroImageDetail="art/detail.png"),
+            "a" * 40,
+            findings,
+            None,
+            publish.HeroAssets(read),
+            publish.HeroDetailAssets(read),
+        )
+        assert [path for _, _, path in seen] == [
+            "apps/beta/art/hero.png", "apps/beta/art/detail.png"
+        ]
+        assert entry["heroRef"] == f"assets/heroes/{hashlib.sha256(hero).hexdigest()}.png"
+        assert entry["heroDetailRef"] == (
+            f"assets/hero-details/{hashlib.sha256(detail).hexdigest()}.png"
+        )
+        assert dropped(findings) == []
+
+    def test_every_screenshot_is_read_from_the_subdir(self):
+        one, two = png_bytes(1200, 800, b"\x05" * 32), png_bytes(1200, 800, b"\x06" * 32)
+        read, seen = recording_reader({"apps/beta/s1.png": one, "apps/beta/s2.png": two})
+        findings = Findings()
+        entry = publish.bake_entry(
+            subdir_authored("apps/beta"),
+            fetched_manifest(screenshots=["s1.png", "s2.png"]),
+            "a" * 40,
+            findings,
+            None,
+            None,
+            None,
+            publish.ScreenshotAssets(read),
+        )
+        assert [path for _, _, path in seen] == ["apps/beta/s1.png", "apps/beta/s2.png"]
+        assert entry["screenshotRefs"] == [
+            f"assets/screenshots/{hashlib.sha256(one).hexdigest()}.png",
+            f"assets/screenshots/{hashlib.sha256(two).hexdigest()}.png",
+        ]
+        assert dropped(findings) == []
+
+    def test_an_entry_without_a_subdir_still_reads_the_bare_path(self):
+        """The root-app case is the one every published entry is today, so it
+        must be byte-for-byte what it was: the manifest path, unjoined."""
+        icon, hero, shot = png_bytes(512, 512), png_bytes(1600, 900), png_bytes(1200, 800)
+        read, seen = recording_reader({"icon.png": icon, "hero.png": hero, "s.png": shot})
+        findings = Findings()
+        entry = publish.bake_entry(
+            subdir_authored(None),
+            fetched_manifest(iconPath="icon.png", heroImage="hero.png", screenshots=["s.png"]),
+            "a" * 40,
+            findings,
+            publish.IconAssets(read),
+            publish.HeroAssets(read),
+            None,
+            publish.ScreenshotAssets(read),
+        )
+        assert [path for _, _, path in seen] == ["icon.png", "hero.png", "s.png"]
+        assert {"iconRef", "heroRef", "screenshotRefs"} <= entry.keys()
+        assert findings.warnings == []
+
+    def test_a_subdir_app_missing_its_icon_reports_the_same_finding(self):
+        """Same warn-and-continue outcome as a root app with a missing icon: the
+        card loses its picture, the finding names the path the manifest wrote,
+        and nothing raises -- the miss is now at the JOINED path, not the root."""
+        read, seen = recording_reader({})
+        findings = Findings()
+        entry = publish.bake_entry(
+            subdir_authored("apps/beta"), fetched_manifest(iconPath="icon.png"),
+            "a" * 40, findings, publish.IconAssets(read),
+        )
+        assert [path for _, _, path in seen] == ["apps/beta/icon.png"]
+        assert "iconRef" not in entry
+        assert findings.errors == []
+        assert any("cannot read icon 'icon.png'" in w for w in findings.warnings)
+
+    def test_a_builtin_entry_is_byte_identical(self):
+        """A builtin's `manifestFrom.subdir` steers only the manifest read; its
+        refs are client-local and never ingested, so nothing here may touch it."""
+        assets = publish.IconAssets(reader_for({}))
+        heroes = publish.HeroAssets(reader_for({}))
+        entry = publish.bake_entry(BUILTIN, MANIFEST, "b" * 40, Findings(), assets, heroes)
+        assert entry["iconRef"] == "/app-assets/demo-app/icon.svg"
+        assert entry["heroRef"] == "/app-assets/demo-app/hero.svg"
+        assert entry["source"] == {"type": "builtin"}
+        assert assets.files == {} and heroes.files == {}
+
+    def test_a_real_monorepo_checkout_reads_the_icon_beside_app_json(
+        self, tmp_path, allow_local_urls
+    ):
+        """The measured reproduction, end to end through `git show`: two apps in
+        one repository, the entry names the second, and only that app's own
+        `icon.png` is admitted -- not the sibling's, and not a root file."""
+        icon = png_bytes(512, 512, bytes(range(256)))
+        repo = tmp_path / "mono"
+        make_repo(
+            repo, fetched_manifest(iconPath="icon.png"), subdir="apps/beta",
+            extra={
+                "apps/beta/icon.png": icon,
+                "apps/alpha/icon.png": png_bytes(512, 512, b"\x07" * 32),
+                "icon.png": png_bytes(512, 512, b"\x08" * 32),
+            },
+        )
+        entry = subdir_authored("apps/beta")
+        entry["source"]["url"] = str(repo)
+        findings = Findings()
+        assets = publish.IconAssets(publish.fetch_blob, publish.blob_size)
+        doc = publish.build_registry(
+            {"schemaVersion": 1, "apps": [entry]},
+            publish.resolve_commit, publish.fetch_manifest,
+            publish.datetime.now(publish.timezone.utc), findings, assets,
+        )
+        expected = f"assets/icons/{hashlib.sha256(icon).hexdigest()}.png"
+        assert doc["apps"][0]["iconRef"] == expected
+        assert assets.files == {expected: icon}
+        assert findings.warnings == []
+
+
+class TestContainedBlobPath:
+    """The join is where a curated `subdir` and a manifest path become ONE git
+    path, so containment is re-stated here instead of trusted from the schema
+    upstream and the asset-ref rule alongside. Mutation each reject case
+    catches: deleting that check lets the spelling through to `git show`."""
+
+    @pytest.mark.parametrize(
+        ("subdir", "rel_path", "expected"),
+        [
+            (None, "icon.png", "icon.png"),
+            ("apps/beta", "icon.png", "apps/beta/icon.png"),
+            ("apps/beta", "art/hero.png", "apps/beta/art/hero.png"),
+            # Normalized the same way `fetch_manifest` normalizes `app.json`'s
+            # directory, so the two reads cannot name one tree two ways.
+            ("apps/beta/", "icon.png", "apps/beta/icon.png"),
+            ("apps/beta", "./icon.png", "apps/beta/icon.png"),
+            # A double dot inside a NAME is a legal segment, not an escape.
+            ("apps/beta", "a..b/icon.png", "apps/beta/a..b/icon.png"),
+        ],
+    )
+    def test_accepts_a_contained_join(self, subdir, rel_path, expected):
+        assert publish.contained_blob_path(subdir, rel_path) == expected
+
+    @pytest.mark.parametrize(
+        ("subdir", "rel_path"),
+        [
+            # `Path("apps") / "/etc/x"` DISCARDS the left operand, so an absolute
+            # right-hand side would silently leave the subdir behind.
+            ("apps/beta", "/etc/icon.png"),
+            ("/apps/beta", "icon.png"),
+            ("apps/beta", "../alpha/icon.png"),
+            ("apps/../..", "icon.png"),
+            ("apps/beta", "..\\icon.png"),
+            ("apps\\beta", "icon.png"),
+            ("apps/beta", "icon\x00.png"),
+        ],
+    )
+    def test_refuses_a_join_that_leaves_the_repository(self, subdir, rel_path):
+        assert publish.contained_blob_path(subdir, rel_path) is None
+
+    def test_an_uncontained_join_is_a_warning_and_never_reaches_the_reader(self):
+        """Same warn-and-continue contract as every other rejection in the
+        ingest path: the card loses its picture, the run continues, and git is
+        never handed the spelling."""
+        read, seen = recording_reader({"apps/beta/icon.png": png_bytes(512, 512)})
+        findings = Findings()
+        result = publish.IconAssets(read).add(
+            "https://x/y.git", "a" * 40, "../alpha/icon.png", "demo", findings,
+            subdir="apps/beta",
+        )
+        assert result is None
+        assert seen == []
+        assert findings.errors == []
+        assert any("outside the repository" in w for w in findings.warnings)
+
+
+# ---------------------------------------------------------------------------
 # verify_dist closes the last link of the integrity chain
 # ---------------------------------------------------------------------------
 #
@@ -2973,7 +3247,7 @@ def test_release_entry_ingests_art_from_the_repository_not_the_asset_url():
     seen_urls: list[str] = []
 
     class SpyAssets:
-        def add(self, url, commit, ref, name, findings):
+        def add(self, url, commit, ref, name, findings, *, subdir=None):
             seen_urls.append(url)
             return "assets/icons/" + "c" * 64 + ".png"
 

@@ -932,6 +932,39 @@ def fetch_blob(url: str, commit: str, path: str) -> bytes:
     return run_git_bytes(["show", f"{commit}:{path}"], cwd=repo)
 
 
+def contained_blob_path(subdir: str | None, rel_path: str) -> str | None:
+    """Where an app-relative asset path lives in the REPOSITORY, or None.
+
+    A manifest names its art relative to ITSELF: `iconPath: "icon.png"` is the
+    file beside `app.json`, and the installed app resolves it against its own
+    directory, as does the store client. For an entry with `source.subdir`
+    that directory is not the repository root, so a blob read has to join the
+    subdir exactly as `fetch_manifest` joins it for `app.json`. Reading the bare
+    manifest path instead looked for a monorepo app's icon at the repo root,
+    so a correct manifest published a card with no icon, hero or screenshots.
+    The join lives here, in the reader, and not in the field: the manifest key
+    keeps its app-relative meaning and the published ref is the hosted path.
+
+    Containment is re-checked at the point where the value becomes a git path
+    rather than trusted from upstream: `subdir` is curated and bounded by the
+    authored schema, `rel_path` has passed `bake_asset_ref`, and a check that
+    lives one layer up is a check a future caller can skip. Refused outright:
+    an absolute result, a NUL or backslash anywhere, and a `..` SEGMENT (a name
+    such as `a..b` is a legal segment the asset-ref rule already admits).
+    `Path` normalizes a trailing slash and a `.` segment the same way the
+    manifest read does, so the two reads cannot name one tree two ways.
+    """
+    joined = (Path(subdir) / rel_path if subdir else Path(rel_path)).as_posix()
+    # One test AFTER the join covers an absolute spelling on either side:
+    # `Path("apps") / "/x"` discards the left operand, so the result starts
+    # with `/` exactly when a component did.
+    if joined.startswith("/") or "\\" in joined or "\x00" in joined:
+        return None
+    if ".." in joined.split("/"):
+        return None
+    return joined
+
+
 def png_dimensions(data: bytes) -> tuple[int, int] | None:
     """Width and height from a PNG header, or None if it is not a PNG.
 
@@ -1011,8 +1044,15 @@ class _FetchedImages:
         rel_path: str,
         app: str,
         findings: Findings,
+        *,
+        subdir: str | None = None,
     ) -> str | None:
         """Ingest one image, returning its catalog-relative path.
+
+        `rel_path` is the path AS THE MANIFEST SPELLS IT, relative to the
+        manifest; `subdir` is where that manifest sits in the repository, when
+        not at its root. Every diagnostic names `rel_path`, because that is the
+        spelling the publisher can find in their own file.
 
         Every rejection is a WARNING, never an error: a bad image costs one card
         its picture, and halting would take every other app's release with it.
@@ -1024,11 +1064,21 @@ class _FetchedImages:
                 f"catalog does not host; publishing without it"
             )
             return None
+        # Resolve against the manifest's directory BEFORE anything touches git.
+        # The sizer and the reader both take the repository path, so one join
+        # here is what keeps them from disagreeing about which blob they mean.
+        blob_path = contained_blob_path(subdir, rel_path)
+        if blob_path is None:
+            findings.warn(
+                f"{app}: {self._NOUN} {rel_path!r} under subdir {subdir!r} resolves "
+                f"outside the repository; publishing without it"
+            )
+            return None
         # Size BEFORE bytes. The read below buffers the whole object, so a cap
         # applied afterwards is a cap that never fires on the input it exists for.
         if self._sizer is not None:
             try:
-                size = self._sizer(url, commit, rel_path)
+                size = self._sizer(url, commit, blob_path)
             except PublishError as exc:
                 findings.warn(f"{app}: cannot size {self._NOUN} {rel_path!r}: {exc}")
                 return None
@@ -1039,7 +1089,7 @@ class _FetchedImages:
                 )
                 return None
         try:
-            data = self._reader(url, commit, rel_path)
+            data = self._reader(url, commit, blob_path)
         except PublishError as exc:
             findings.warn(f"{app}: cannot read {self._NOUN} {rel_path!r}: {exc}")
             return None
@@ -1448,6 +1498,14 @@ def bake_entry(
             )
 
     source_type = str(source.get("type") or "")
+    # The manifest's asset paths are relative to the MANIFEST, so an app read
+    # from `source.subdir` has its art read from there too -- the same join
+    # `build_registry` hands `fetch_manifest` for `app.json`. Only the ingest
+    # read joins it: the published ref is the hosted, content-addressed path,
+    # and the manifest key keeps the app-relative meaning that the installed
+    # app and the store client both resolve it by. A builtin never reaches an
+    # ingester and a release entry has no subdir, so both see None here.
+    subdir = source.get("subdir") if isinstance(source.get("subdir"), str) else None
     # `iconPath` is the key a fetched app declares; `iconUrl` is the absolute
     # client-local path a builtin declares. Reading the wrong one per source type
     # is why third-party entries used to publish no icon at all.
@@ -1465,7 +1523,7 @@ def bake_entry(
         if not ref:
             continue
         if source_type != "builtin" and assets is not None:
-            ref = assets.add(source["url"], commit, ref, name, findings)
+            ref = assets.add(source["url"], commit, ref, name, findings, subdir=subdir)
             if not ref:
                 continue
         entry[field] = ref
@@ -1541,7 +1599,7 @@ def bake_entry(
             # against the catalog root onto a file only the app's repository has
             # -- a guaranteed 404 that looks like a store bug, where no art at
             # all is merely a card without a picture.
-            ref = ingester.add(source["url"], commit, ref, name, findings)
+            ref = ingester.add(source["url"], commit, ref, name, findings, subdir=subdir)
         if ref:
             entry[field] = ref
 
@@ -1553,7 +1611,11 @@ def bake_entry(
             hosted = [
                 stored
                 for shot in declared_shots
-                if (stored := shots.add(source["url"], commit, shot, name, findings))
+                if (
+                    stored := shots.add(
+                        source["url"], commit, shot, name, findings, subdir=subdir
+                    )
+                )
             ]
         else:
             hosted = declared_shots
