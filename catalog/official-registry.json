@@ -535,6 +535,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, MIT, pinned to the v1.1.0 tag. NOT read-only: edits and writes files on the gateway host (credential paths refused on every route by the gateway's own fence) and registers in-gateway Python routes, so it needs a trust grant. No cron, no MCP."
+    },
+    {
+      "name": "html-studio",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/chhanz/html-studio",
+        "ref": "69557c1e49c8197e3cf5b064dd99cc6c8409d596"
+      },
+      "author": {
+        "name": "chhanz",
+        "url": "https://github.com/chhanz",
+        "kind": "person"
+      },
+      "categories": [
+        "productivity"
+      ],
+      "note": "Community app by an individual author; public repo, Apache-2.0. View, edit, check and present HTML slide decks beside the agent that writes them. Pinned to the release branch, which carries the built UI (main is sources only). Python stdlib backend, one skill, no cron."
     }
   ],
   "removed": [],
