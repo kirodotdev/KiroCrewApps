@@ -552,6 +552,23 @@
         "productivity"
       ],
       "note": "Community app by an individual author; public repo, Apache-2.0. View, edit, check and present HTML slide decks beside the agent that writes them. Pinned to a release-v<version> branch commit, which carries the built UI (main is sources only). Python stdlib backend, one skill, no cron."
+    },
+    {
+      "name": "aidlc-studio",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/warren830/kirocrew-app-aidlc",
+        "ref": "v1.0.1"
+      },
+      "author": {
+        "name": "ychchen",
+        "url": "https://github.com/warren830",
+        "kind": "person"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
     }
   ],
   "removed": [],
