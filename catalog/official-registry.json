@@ -541,7 +541,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/chhanz/html-studio",
-        "ref": "69557c1e49c8197e3cf5b064dd99cc6c8409d596"
+        "ref": "761e3cbc8e18e90c6b4e89e744b50ddad34c7077"
       },
       "author": {
         "name": "chhanz",
@@ -551,7 +551,7 @@
       "categories": [
         "productivity"
       ],
-      "note": "Community app by an individual author; public repo, Apache-2.0. View, edit, check and present HTML slide decks beside the agent that writes them. Pinned to the release branch, which carries the built UI (main is sources only). Python stdlib backend, one skill, no cron."
+      "note": "Community app by an individual author; public repo, Apache-2.0. View, edit, check and present HTML slide decks beside the agent that writes them. Pinned to a release-v<version> branch commit, which carries the built UI (main is sources only). Python stdlib backend, one skill, no cron."
     }
   ],
   "removed": [],
