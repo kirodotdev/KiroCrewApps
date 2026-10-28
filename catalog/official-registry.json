@@ -569,6 +569,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "crew-calendar",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/shblue21/kiro-calendar.git",
+        "ref": "v0.1.0"
+      },
+      "author": {
+        "name": "Jihun Kim",
+        "url": "https://github.com/shblue21",
+        "kind": "person"
+      },
+      "categories": [
+        "productivity"
+      ],
+      "note": "Individual author; public repo, MIT. The release tag includes a prebuilt UI and Universal macOS helper. Python routes and MCP server require app trust. Apple Calendar writes require native confirmation. No cron."
     }
   ],
   "removed": [],
