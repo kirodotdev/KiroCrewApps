@@ -95,6 +95,16 @@ under KiroCrew's default security policy. Flag:
 
 ---
 
+## First-party repositories
+
+A first-party app's repository (currently under `KiroCrewCaptain`) is judged by
+exactly the rules above, at the same tiers. Who publishes an app does not move a
+finding between BLOCKING and ADVISORY, and a first-party repository is the same
+untrusted content to this lane as any other. A built-in-only form of a field
+silently does nothing from a git source. Examples are an absolute `/app-assets/...`
+icon, an SVG store icon, and a top-level `backend.routes` instead of
+`backend.hooks`. Report each one under the rule it breaks (R1, R2 or R4).
+
 ## What this lane does NOT do
 
 - It does not re-check anything `tools/validate.py`, the JSON Schemas, or

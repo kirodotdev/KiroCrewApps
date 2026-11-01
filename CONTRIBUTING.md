@@ -15,7 +15,7 @@ differently:
 
 | Shape | What it touches | What reviewers look for |
 |---|---|---|
-| **Listing an app** | `catalog/official-registry.json`, `catalog/editorial.json` | Is the app real, installable, and in the right category |
+| **Listing an app** (third- or first-party) | `catalog/official-registry.json`, `catalog/editorial.json` | Is the app real, installable, and in the right category |
 | **Editorial curation** | `catalog/editorial.json` | Does the Discover layout still partition cleanly |
 | **Contract or tooling** | `schema/`, `tools/`, `tests/` | Does the gate still reject what it should |
 
@@ -42,6 +42,19 @@ What a reviewer will check, so you can check it first:
   in the store is wrong, fix the app's manifest, not this file.
 - The app does what its manifest says. A listing is an endorsement to the extent
   that it makes the app installable in one click from inside Kiro Crew.
+
+### First-party apps
+
+App code is never committed here. First-party apps the Kiro Crew team publishes
+outside the Kiro Crew package each have a dedicated public repository, currently
+under the [`KiroCrewCaptain`](https://github.com/KiroCrewCaptain) account. Their
+code is reviewed in that repository, by its own CI and pull requests. A
+first-party listing here is reviewed exactly like a third-party one: the same
+validator, the same app-readiness lane against the pinned ref, and fixes land in
+the app's repository, followed by a re-pin here. The only difference is that the
+entry states `author` explicitly, because a manifest cannot claim the Kiro Crew
+name. Third-party apps keep their own repositories too. Nothing about where an
+app's code lives changes how its listing is reviewed.
 
 ## Contract and tooling changes
 
