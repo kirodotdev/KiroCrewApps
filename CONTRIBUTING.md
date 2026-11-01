@@ -56,6 +56,26 @@ entry states `author` explicitly, because a manifest cannot claim the Kiro Crew
 name. Third-party apps keep their own repositories too. Nothing about where an
 app's code lives changes how its listing is reviewed.
 
+#### The README a first-party app repository carries
+
+Every first-party app repository starts from
+[`KiroCrewCaptain/kirocrew-app-template`](https://github.com/KiroCrewCaptain/kirocrew-app-template)
+and its README follows that template's standard, written for a person who has
+never seen the app:
+
+- **What it is** and **the problem it solves**, in plain language.
+- **Top 3 use cases**, each a short scenario with a real screenshot.
+- **A screen recording** of one task end to end (an inline GIF plus an MP4).
+- **How to use it**: install from the App Store, first run, and the everyday
+  steps; where its data lives and how to disable or uninstall it.
+
+Screenshots and the recording come from the app running in Kiro Crew, captured
+with the template's harness on an isolated gateway with fictional data. A scene
+that shows an agent conversation uses a live model, never scripted replies. The
+template's `CHECKLIST.md` is the acceptance list and its `check_readme.py` runs
+in the repository's CI. A first-party listing is not proposed here until its
+README meets it.
+
 ## Contract and tooling changes
 
 `tools/publish.py` reads manifests from repositories we do not control, so
