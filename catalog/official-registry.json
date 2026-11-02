@@ -569,6 +569,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "multiplex",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Premshay/kirocrew-multiplex",
+        "ref": "68f158fcfc86f81ca202f6e8dfe85d528bca61a2"
+      },
+      "author": {
+        "name": "Premshay",
+        "url": "https://github.com/Premshay",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to the v0.1.1 commit. Cross-agent session overview with checkpoints. In-gateway Python backend, needs a trust grant; reads bounded head/tail metadata of Claude/Codex transcripts inside declared workspace roots. No network, cron, skills or MCP."
     }
   ],
   "removed": [],
