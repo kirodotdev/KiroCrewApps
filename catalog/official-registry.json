@@ -363,20 +363,19 @@
     {
       "name": "personal-shopper",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "f9cc1fd3a82a9ce48259dd6eb703580fd0f1a94a",
-          "subdir": "src/kiro_crew/apps/builtins/personal_shopper"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-personal-shopper",
+        "ref": "5ee04d9924519b2a1df19e43715b3127c4c400ef"
       },
       "categories": [
         "productivity"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.12.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge only after that release is published."
     },
     {
       "name": "pptx-maker",
