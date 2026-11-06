@@ -203,7 +203,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/KiroCrewCaptain/kirocrew-app-design-critique",
-        "ref": "a2de30a069e7db8f3d25d18b29413326b5cba3e3"
+        "ref": "36188055057a19bbc32783b278b9cacb433000eb"
       },
       "categories": [
         "productivity"
@@ -238,7 +238,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/KiroCrewCaptain/kirocrew-app-file-explorer",
-        "ref": "222feef8439e5ccaca030a213a897665950bc04a"
+        "ref": "e68646984d6825eade82dfbf067879d8b55441ab"
       },
       "categories": [
         "developer-tools"
@@ -345,7 +345,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/KiroCrewCaptain/kirocrew-app-papyrus",
-        "ref": "54b741668eab5735106e6c594051559946bf1564"
+        "ref": "6ca7bc697f39b78a5a4dba7bdf8d3e5eaa11348f"
       },
       "categories": [
         "research-writing"
@@ -361,7 +361,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/KiroCrewCaptain/kirocrew-app-personal-shopper",
-        "ref": "5ee04d9924519b2a1df19e43715b3127c4c400ef"
+        "ref": "e3d71dec00e904c742b9992dbe043b06084c7fac"
       },
       "categories": [
         "productivity"
@@ -378,7 +378,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/KiroCrewCaptain/kirocrew-app-pptx-maker",
-        "ref": "d9ee0134c47593ba301cae4ecee9d1063b6d264e"
+        "ref": "1c47c5099df4302f74de828407f87f193edea758"
       },
       "categories": [
         "research-writing"
