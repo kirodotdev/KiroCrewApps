@@ -562,6 +562,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "kanban",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/nathanyi96/kirocrew-app-kanban",
+        "ref": "v0.1.0"
+      },
+      "author": {
+        "name": "nathanyi96",
+        "url": "https://github.com/nathanyi96",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to the v0.1.0 tag (54e45c1). In-gateway Python routes hook starts chat, Task Runner and background model runs via host internals; needs a trust grant. Writes Task Runner specs outside app storage; no network, cron, skills or MCP. SVG store art not hosted."
     }
   ],
   "removed": [],
