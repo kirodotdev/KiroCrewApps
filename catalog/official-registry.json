@@ -562,6 +562,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "usage-lens",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/vokako/kirocrew-usage-lens",
+        "ref": "e1525fc06b75d97a1cfe5734eaa2c1089d92abcb"
+      },
+      "author": {
+        "name": "vokako",
+        "url": "https://github.com/vokako",
+        "kind": "person"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to 0.1.0 (e1525fc). Read-only: reads the gateway's usage/tokens shards, crons.json job names, session-log titles and the gateway's cached credit figures. GET-only Python routes; needs a trust grant. No storage, network, cron or MCP."
     }
   ],
   "removed": [],
