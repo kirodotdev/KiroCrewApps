@@ -562,6 +562,24 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "outrider",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/appetizers-io/outrider",
+        "ref": "eeb203d859a215d5310b4e4b32dd64ee577eb0bf",
+        "subdir": "apps/kiro-crew"
+      },
+      "author": {
+        "name": "appetizers-io",
+        "url": "https://github.com/appetizers-io",
+        "kind": "org"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "note": "Org author; public repo, Apache-2.0, pinned to outrider#105 (0.2.2; tag v0.2.2 predates it). NOT read-only: Python backend + MCP; reads GitHub via gh, creates review sessions and git worktrees, notifies, may fetch a checksum-pinned runtime. Others' PRs keep Crew approvals. Needs third-party apps on."
     }
   ],
   "removed": [],
