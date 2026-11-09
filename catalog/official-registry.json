@@ -575,7 +575,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/shblue21/kiro-calendar.git",
-        "ref": "v0.1.0"
+        "ref": "v0.1.1"
       },
       "author": {
         "name": "Jihun Kim",
