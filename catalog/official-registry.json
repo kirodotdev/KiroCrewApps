@@ -562,6 +562,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "workflow-lens",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Premshay/kirocrew-workflow-lens",
+        "ref": "3d17ac8bed1c8fdad46a4c7c3fa4e92d5500c709"
+      },
+      "author": {
+        "name": "Premshay",
+        "url": "https://github.com/Premshay",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to 2.0.2. Read-only: reads Claude Code workflow files under ~/.claude/projects, so it shows nothing for other harnesses. GET-only Python routes; needs agent.apps_allow_third_party. Launcher only prefills the composer. No storage, network, cron or MCP."
     }
   ],
   "removed": [],
