@@ -562,6 +562,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "keenable",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/keenableai/keenable-kiro-crew-app",
+        "ref": "fcff7156df6112591e1beceaa8eb3d3d9f65b496"
+      },
+      "author": {
+        "name": "Keenable",
+        "url": "https://github.com/keenableai",
+        "kind": "org"
+      },
+      "categories": [
+        "research-writing"
+      ],
+      "note": "Keenable (keenableai), the vendor; public repo, MIT; pinned to the reviewed main commit (no tags). Declarations only: one skill and one remote MCP server the vendor runs at api.keenable.ai, whose tools can change with no re-pin. No backend, hooks, cron or UI; needs a trust grant."
     }
   ],
   "removed": [],
