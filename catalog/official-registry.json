@@ -562,6 +562,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "agentmon-live",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/codenotary/agentmon-live.git",
+        "ref": "main"
+      },
+      "author": {
+        "name": "Codenotary",
+        "url": "https://github.com/codenotary",
+        "kind": "org"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "note": "Codenotary; public repo, Apache-2.0. Read-only app: reads Kiro Crew's session logs and changes no chat state. Ships a Python startup hook (standard library only) that starts a local Node web server on 127.0.0.1, so it needs node on the machine and the user's trust for third-party app code."
     }
   ],
   "removed": [],
