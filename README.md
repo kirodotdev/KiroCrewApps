@@ -124,6 +124,7 @@ would break one of them:
 | `source.sourceTag` | forbidden | present when the ref was a tag, generated |
 | Display fields (`displayName`, `summary`, `author`, `tags`, …) | **forbidden** | present, generated |
 | `generatedAt` / `revision` | forbidden | stamped by CI |
+| `updatedAt` | forbidden | git entries only: the pinned commit's committer date, generated; absent means unknown |
 
 A curator writes a branch because pinning is the pipeline's job, not a human's.
 The pin is load-bearing on the client side: an install fetches that exact commit
