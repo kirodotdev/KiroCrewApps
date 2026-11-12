@@ -551,7 +551,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/warren830/kirocrew-app-aidlc",
-        "ref": "v1.0.1"
+        "ref": "v2.0.1"
       },
       "author": {
         "name": "ychchen",
@@ -561,7 +561,7 @@
       "categories": [
         "developer-tools"
       ],
-      "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+      "note": "Individual author; public repo, Apache-2.0, pinned to v2.0.1; bundles MIT-0 AI-DLC Workflows 2.11.3. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
     }
   ],
   "removed": [],
