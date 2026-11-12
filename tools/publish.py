@@ -469,6 +469,23 @@ def fetch_manifest(url: str, commit: str, subdir: str | None = None) -> dict[str
     return manifest
 
 
+def fetch_commit_date(url: str, commit: str) -> datetime | None:
+    """The committer date of *commit*, or ``None`` when it cannot be read.
+
+    Read from the checkout ``fetch_manifest`` already made for this pin, so it
+    costs no extra fetch. A date is a display fact, not worth failing a release
+    over, so no failure here raises.
+    """
+    try:
+        raw = run_git(["show", "-s", "--format=%ct", commit], cwd=fetched_repo(url, commit))
+    except PublishError:
+        return None
+    try:
+        return datetime.fromtimestamp(int(raw.strip()), timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
 def fetch_github_stars(url: str) -> int | None:
     """Read a GitHub repository's stargazer count, or ``None`` for "unknown".
 
@@ -1669,6 +1686,7 @@ def build_registry(
     shots: ScreenshotAssets | None = None,
     stars_fetcher: Callable[[str], int | None] | None = None,
     asset_digester: Callable[[str], str] | None = None,
+    commit_dater: Callable[[str, str], datetime | None] | None = None,
 ) -> dict[str, Any]:
     apps: list[dict[str, Any]] = []
     for authored_entry in authored.get("apps") or []:
@@ -1706,18 +1724,35 @@ def build_registry(
                 )
             asset_url = release_asset_url(source["url"], release_tag, source["asset"])
             asset_sha256 = (asset_digester or fetch_asset_sha256)(asset_url)
-        apps.append(
-            bake_entry(
-                authored_entry, manifest, pin.commit, findings,
-                assets, heroes, hero_details, shots, stars_fetcher,
-                # The RESOLVED tag is the release identity: it is the exact
-                # name the asset URL was derived from, so the published
-                # sourceTag can never disagree with the bytes the URL serves.
-                tag=release_tag if is_release else pin.tag,
-                asset_url=asset_url,
-                asset_sha256=asset_sha256,
-            )
+        entry = bake_entry(
+            authored_entry, manifest, pin.commit, findings,
+            assets, heroes, hero_details, shots, stars_fetcher,
+            # The RESOLVED tag is the release identity: it is the exact
+            # name the asset URL was derived from, so the published
+            # sourceTag can never disagree with the bytes the URL serves.
+            tag=release_tag if is_release else pin.tag,
+            asset_url=asset_url,
+            asset_sha256=asset_sha256,
         )
+        # GENERATED like the star count, and for git entries only: the date of
+        # the commit the entry pins. A committer date is whatever the author's
+        # clock said, so one later than this run is not published -- it would
+        # sort the app above every honest date on every publish.
+        if commit_dater is not None and source.get("type") == "git":
+            committed = commit_dater(origin["url"], pin.commit)
+            if committed is None:
+                findings.warn(
+                    f"{entry['name']}: cannot read the date of {pin.commit}; "
+                    f"publishing without updatedAt"
+                )
+            elif committed > now:
+                findings.warn(
+                    f"{entry['name']}: {pin.commit} is dated {committed:%Y-%m-%dT%H:%M:%SZ}, "
+                    f"later than this run; publishing without updatedAt"
+                )
+            else:
+                entry["updatedAt"] = committed.strftime("%Y-%m-%dT%H:%M:%SZ")
+        apps.append(entry)
 
     stamped = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     content = {
@@ -1979,6 +2014,7 @@ def publish(
     resolver: Callable[[str, str], "str | ResolvedPin"]
     fetcher: Callable[..., dict[str, Any]]
     stars_fetcher: Callable[[str], int | None] | None
+    commit_dater: Callable[[str, str], datetime | None] | None
     assets: IconAssets | None
     heroes: HeroAssets | None
     hero_details: HeroDetailAssets | None
@@ -1993,6 +2029,7 @@ def publish(
         asset_digester = lambda url: "0" * 64  # noqa: E731
         fetcher = lambda url, commit, subdir=None: {}  # noqa: E731
         stars_fetcher = None
+        commit_dater = None
         assets = None
         heroes = None
         hero_details = None
@@ -2002,6 +2039,7 @@ def publish(
         resolver, fetcher = resolve_pin, fetch_manifest
         asset_digester = fetch_asset_sha256
         stars_fetcher = budgeted_stars_fetcher()
+        commit_dater = fetch_commit_date
         assets = IconAssets(fetch_blob, blob_size)
         heroes = HeroAssets(fetch_blob, blob_size)
         hero_details = HeroDetailAssets(fetch_blob, blob_size)
@@ -2013,6 +2051,7 @@ def publish(
             authored_registry, resolver, fetcher, now, findings,
             assets, heroes, hero_details, shots, stars_fetcher,
             asset_digester=asset_digester,
+            commit_dater=commit_dater,
         )
     except PublishError as exc:
         findings.error(str(exc))
