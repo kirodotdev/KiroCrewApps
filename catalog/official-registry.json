@@ -74,12 +74,9 @@
     {
       "name": "auto-improvement",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/auto_improvement"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-auto-improvement",
+        "ref": "a20e767f7a06260d1dc9eda4b3b97cd213bad812"
       },
       "categories": [
         "developer-tools"
@@ -87,7 +84,8 @@
       "author": {
         "name": "zedmor",
         "kind": "person"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.13.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "auto-research",
@@ -253,20 +251,19 @@
     {
       "name": "issue-radar",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/issue_radar"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-issue-radar",
+        "ref": "8bc24aa29e7122cb5c67dbcaa7e1343d0e9200fb"
       },
       "categories": [
         "developer-tools"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.13.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "md-notebook",
