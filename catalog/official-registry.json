@@ -562,6 +562,23 @@
         "developer-tools"
       ],
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
+    },
+    {
+      "name": "mood-music",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/iamwhatever/kirocrew-app-mood-music",
+        "ref": "1e1a2f81eddffb7ecae9a9e6dc45ef747951edf0"
+      },
+      "author": {
+        "name": "iamwhatever",
+        "url": "https://github.com/iamwhatever",
+        "kind": "person"
+      },
+      "categories": [
+        "other"
+      ],
+      "note": "Plays songs that match a mood: YouTube in the page, bilibili in a new browser tab. Public repo, individual author. Backend hooks, UI, one agent (web_search and web_fetch only) and one skill; no install hooks. The in-page YouTube player needs Kiro Crew's ui.frameSources seam (core PR pending)."
     }
   ],
   "removed": [],
