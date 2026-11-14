@@ -76,7 +76,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/KiroCrewCaptain/kirocrew-app-auto-improvement",
-        "ref": "a20e767f7a06260d1dc9eda4b3b97cd213bad812"
+        "ref": "0e1a22d2e10b49cef904d5839e9bb6d3ad2a4ab2"
       },
       "categories": [
         "developer-tools"
@@ -253,7 +253,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/KiroCrewCaptain/kirocrew-app-issue-radar",
-        "ref": "8bc24aa29e7122cb5c67dbcaa7e1343d0e9200fb"
+        "ref": "8e57db85e15e2d53fcd58808aeeac8f54734c6f3"
       },
       "categories": [
         "developer-tools"
