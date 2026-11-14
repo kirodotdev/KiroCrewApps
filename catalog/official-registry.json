@@ -90,38 +90,36 @@
     {
       "name": "auto-research",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/auto_research"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-auto-research",
+        "ref": "a4688e7331d3a280d56e90eedfbd437601f9de52"
       },
       "categories": [
         "research-writing"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "aws-control",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "67152820354de54c31713288897cf7e327e92235",
-          "subdir": "src/kiro_crew/apps/builtins/aws_control"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-aws-control",
+        "ref": "8382917ef0eac04d349fed4f4ad5d90329226ae7"
       },
       "categories": [
         "developer-tools"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "channels",
@@ -232,20 +230,19 @@
     {
       "name": "dev-fleet",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "f68b77d2251622f878c0a57b57011c1272a6de2c",
-          "subdir": "src/kiro_crew/apps/builtins/dev_fleet"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-dev-fleet",
+        "ref": "9eb46b5fa9ce4409a9de87027b02620588cecef3"
       },
       "categories": [
         "developer-tools"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "file-explorer",
@@ -302,12 +299,9 @@
     {
       "name": "meetings",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/meetings"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-meetings",
+        "ref": "a1e710690930abc025f051a97e20fe9db502d7f7"
       },
       "categories": [
         "productivity"
@@ -315,7 +309,8 @@
       "author": {
         "name": "adunuthu",
         "kind": "person"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "mochi",
@@ -401,6 +396,23 @@
         "kind": "person"
       },
       "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.13.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
+    },
+    {
+      "name": "project-scaffolder",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-project-scaffolder",
+        "ref": "92b542c07940e9f6cc8d553b0b491b6cdeef4d50"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
+        "kind": "org"
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "projects",
