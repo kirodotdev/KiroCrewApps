@@ -214,6 +214,22 @@
       "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.13.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
+      "name": "design-tweak",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-design-tweak",
+        "ref": "deff125f4abf4657575f7c03f289bb25d3e37a8d"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "mxiaomen",
+        "kind": "person"
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
+    },
+    {
       "name": "dev-fleet",
       "source": {
         "type": "builtin",
@@ -407,20 +423,19 @@
     {
       "name": "spec-builder",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/spec_builder"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-spec-builder",
+        "ref": "79de0b4e3581bcbde1a021d9a335c63f45a44f30"
       },
       "categories": [
         "developer-tools"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "workflows",
