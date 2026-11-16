@@ -603,6 +603,23 @@
         "other"
       ],
       "note": "Mood-matched songs (YouTube in page, bilibili in new tab) from a buddy chat; a Memory tab edits what it keeps. Individual author. Backend hooks (verify picks via YouTube/bilibili APIs), UI, one agent (web_search, web_fetch), one skill, no install hooks. Asks sessionApproval. Needs KiroCrew#37157."
+    },
+    {
+      "name": "multiplex",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Premshay/kirocrew-multiplex",
+        "ref": "68f158fcfc86f81ca202f6e8dfe85d528bca61a2"
+      },
+      "author": {
+        "name": "Premshay",
+        "url": "https://github.com/Premshay",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to the v0.1.1 commit. Cross-agent session overview with checkpoints. In-gateway Python backend, needs a trust grant; reads bounded head/tail metadata of Claude/Codex transcripts inside declared workspace roots. No network, cron, skills or MCP."
     }
   ],
   "removed": [],
