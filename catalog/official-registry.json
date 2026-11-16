@@ -592,7 +592,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/iamwhatever/kirocrew-app-mood-music",
-        "ref": "1e1a2f81eddffb7ecae9a9e6dc45ef747951edf0"
+        "ref": "12b4c50ea2fa540f2a6428de5ee37df1c7ce904d"
       },
       "author": {
         "name": "iamwhatever",
@@ -602,7 +602,7 @@
       "categories": [
         "other"
       ],
-      "note": "Plays songs that match a mood: YouTube in the page, bilibili in a new browser tab. Public repo, individual author. Backend hooks, UI, one agent (web_search and web_fetch only) and one skill; no install hooks. The in-page YouTube player needs Kiro Crew's ui.frameSources seam (core PR pending)."
+      "note": "Mood-matched songs (YouTube in page, bilibili in new tab) from a buddy chat; a Memory tab edits what it keeps. Individual author. Backend hooks (verify picks via YouTube/bilibili APIs), UI, one agent (web_search, web_fetch), one skill, no install hooks. Asks sessionApproval. Needs KiroCrew#37157."
     }
   ],
   "removed": [],
