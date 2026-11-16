@@ -603,6 +603,23 @@
         "other"
       ],
       "note": "Mood-matched songs (YouTube in page, bilibili in new tab) from a buddy chat; a Memory tab edits what it keeps. Individual author. Backend hooks (verify picks via YouTube/bilibili APIs), UI, one agent (web_search, web_fetch), one skill, no install hooks. Asks sessionApproval. Needs KiroCrew#37157."
+    },
+    {
+      "name": "workflow-lens",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/Premshay/kirocrew-workflow-lens",
+        "ref": "3d17ac8bed1c8fdad46a4c7c3fa4e92d5500c709"
+      },
+      "author": {
+        "name": "Premshay",
+        "url": "https://github.com/Premshay",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to 2.0.2. Read-only: reads Claude Code workflow files under ~/.claude/projects, so it shows nothing for other harnesses. GET-only Python routes; needs agent.apps_allow_third_party. Launcher only prefills the composer. No storage, network, cron or MCP."
     }
   ],
   "removed": [],
