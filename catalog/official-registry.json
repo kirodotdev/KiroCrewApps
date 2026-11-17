@@ -602,6 +602,24 @@
         "other"
       ],
       "note": "Mood-matched songs (YouTube in page, bilibili in new tab) from a buddy chat; a Memory tab edits what it keeps. Individual author. Backend checks picks on YouTube/bilibili, UI, one agent (web_search, web_fetch), one skill, no install hooks. Asks sessionApproval, hiddenSessions. Needs KiroCrew#37157."
+    },
+    {
+      "name": "prism",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/aws-samples/sample-prism-d1-velocity.git",
+        "ref": "fcbdfd242d0660784b4f4bc3d77e55edbaa02775",
+        "subdir": "kirocrew-app"
+      },
+      "author": {
+        "name": "aws-samples",
+        "url": "https://github.com/aws-samples",
+        "kind": "org"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "note": "Third-party AWS sample (aws-samples, MIT); app 0.4.0 in the kirocrew-app subdir, pinned to a commit. onInstall runs npm install -g @prism-d1/cli@^1.21.3 when prism-cli is missing or older (no sudo); works without it. network false, no agents, one script cron."
     }
   ],
   "removed": [],
