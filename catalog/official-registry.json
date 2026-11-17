@@ -142,20 +142,19 @@
     {
       "name": "code-review-sage",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/code_review_sage"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-code-review-sage",
+        "ref": "711261d196f5ea4fa8027bbaa0e4991b11f3d402"
       },
       "categories": [
         "developer-tools"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "command-bar",
