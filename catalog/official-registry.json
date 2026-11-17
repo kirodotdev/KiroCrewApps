@@ -56,20 +56,19 @@
     {
       "name": "agent-worlds",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/agent_worlds"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-agent-worlds",
+        "ref": "433c1e48900b816aa7ff87f400adc6d5dec2eff4"
       },
       "categories": [
         "agents-automation"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "auto-improvement",
@@ -331,20 +330,19 @@
     {
       "name": "ops-mission-control",
       "source": {
-        "type": "builtin",
-        "manifestFrom": {
-          "url": "https://github.com/kirodotdev/KiroCrew.git",
-          "ref": "164bd411cccef1a9aaf1eda52adf8f642a0397a8",
-          "subdir": "src/kiro_crew/apps/builtins/ops_mission_control"
-        }
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-ops-mission-control",
+        "ref": "92e26de80e09f5ce1cbb2051eab43bd5c919eb31"
       },
       "categories": [
         "oncall-ops"
       ],
       "author": {
         "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
         "kind": "org"
-      }
+      },
+      "note": "First-party app, formerly built into Kiro Crew; existing installs move to this repository automatically from Kiro Crew 0.14.0. ref must equal the commit pinned in that release's src/kiro_crew/apps/adoption-pins.json; merge together with the Kiro Crew pin PR that adds it."
     },
     {
       "name": "papyrus",
