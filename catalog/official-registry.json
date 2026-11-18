@@ -588,7 +588,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/iamwhatever/kirocrew-app-mood-music",
-        "ref": "a8fe2e50e98abd16d0a657f547b4975ee4eb2122"
+        "ref": "eb312ed2ca43ec90799484b96b70178b72ad9497"
       },
       "author": {
         "name": "iamwhatever",
@@ -598,7 +598,7 @@
       "categories": [
         "other"
       ],
-      "note": "Mood-matched songs (YouTube in page, bilibili in new tab) from a buddy chat; a Memory tab edits what it keeps. Individual author. Backend checks picks on YouTube/bilibili, UI, one agent (web_search, web_fetch), one skill, no install hooks. Asks sessionApproval, hiddenSessions. Needs KiroCrew#37157."
+      "note": "Mood-matched songs (YouTube in page, bilibili in tab or Crew browser), buddy chat, editable Memory tab. Individual author. Backend, UI, one agent (web_search, web_fetch, browser on 4 declared pages), one skill, no hooks. Asks sessionApproval, hiddenSessions, browserSites. Needs KiroCrew#38333."
     }
   ],
   "removed": [],
