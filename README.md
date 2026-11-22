@@ -7,6 +7,15 @@ This repository holds **data and its contract**, not code. Clients fetch the
 published output at runtime, which is the point: the storefront changes when
 this repository changes, with no client release.
 
+That includes first-party apps. An app the Kiro Crew team publishes outside the
+Kiro Crew package lives in a **dedicated public repository of its own**,
+currently under the [`KiroCrewCaptain`](https://github.com/KiroCrewCaptain)
+account (for example `KiroCrewCaptain/kirocrew-app-personal-shopper`). It is
+listed here like any other `git` entry, with no `subdirectory`, and goes
+through the same gate, pinning and readiness review. No app source is
+committed to this repository, and the publish pipeline only ever reads
+`catalog/`. See [First-party apps](#first-party-apps).
+
 The published catalog is the store's **inventory, not just its copy**: a
 KiroCrew client installs a `git`-source entry by fetching exactly the commit the
 published document pins (`source.ref`), and reads update availability from the
@@ -167,6 +176,26 @@ cannot be written down.
 An app in no category still appears — it lands in the default bucket rather than
 being hidden — but the validator will say so, since the usual cause is a
 forgotten edit.
+
+### First-party apps
+
+A first-party app is authored the same way, and nothing in the gate or the
+pipeline treats it differently. Its code lives in its own repository (currently
+under `KiroCrewCaptain`), with its own tests and CI, and its entry here names
+that repository's url and a ref. Pin a release tag or a commit rather than a
+branch: nothing distinguishes a first-party repository from a third-party one
+once it is fetched.
+
+Two things a first-party entry states that a manifest cannot:
+
+- **`author`.** A manifest may never assert a reserved author such as Kiro Crew,
+  so the attribution is set on the catalog entry, as it is for every
+  first-party entry today.
+- **The move from `builtin`.** An app that Kiro Crew also ships as a built-in
+  keeps its `builtin` entry until the Kiro Crew release that adopts existing
+  installs onto the external repository. Flipping the entry to `git` earlier
+  does not migrate anyone. A client that ships the built-in keeps running its
+  bundled copy, and the store keeps labelling it as the built-in.
 
 ## What the gate enforces
 
