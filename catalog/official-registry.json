@@ -597,6 +597,23 @@
         "other"
       ],
       "note": "Mood-matched songs in Crew browser (YouTube/bilibili); page shows buddy's browser. Buddy chat hidden, in Crew memory. Solo author. Backend, song-end hook, UI, 2 agents, 1 skill. Asks sessionApproval, hiddenSessions, chatSlots, browserSites, browser:view. Needs KiroCrew#39018, #39943, #40261, #40727."
+    },
+    {
+      "name": "alba",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/ggiallo28/kirocrew-alba-brief.git",
+        "ref": "v1.45.4"
+      },
+      "author": {
+        "name": "ggiallo28",
+        "url": "https://github.com/ggiallo28",
+        "kind": "person"
+      },
+      "categories": [
+        "productivity"
+      ],
+      "note": "Individual author; public repo. Daily-brief app reading Gmail, Slack, Calendar, Drive, GitHub, Notion, Linear, Trello, Outlook, LinkedIn and more, one block per space, with a chat companion that answers questions about past briefs and an animated mascot. Read-only on every connected app."
     }
   ],
   "removed": [],
