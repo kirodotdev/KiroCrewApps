@@ -582,6 +582,23 @@
       "note": "Individual author; public repo, Apache-2.0, pinned to v1.0.1; bundles MIT-0 AI-DLC Workflows 2.7.1. NOT read-only: installs that harness into repos the owner registers and relays the owner's confirmed gate decisions to the intent's chat; needs a trust grant. No git writes, network, cron or MCP."
     },
     {
+      "name": "github-projects",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/pinhogo/kirocrew-github-projects",
+        "ref": "c634485808faccf110fee1e86a4ae5b38d81bcb4"
+      },
+      "author": {
+        "name": "pinhogo",
+        "url": "https://github.com/pinhogo",
+        "kind": "person"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "note": "Individual author; public repo, MIT, pinned to the v1.0.1 commit. NOT read-only: its Python backend runs `gh api graphql` with the user's own GitHub CLI login to create, move and delete Projects v2 items; needs a trust grant. UI text is Portuguese only. No cron, hooks, MCP or install scripts."
+    },
+    {
       "name": "mood-music",
       "source": {
         "type": "git",
