@@ -597,6 +597,23 @@
         "other"
       ],
       "note": "Mood-matched songs in Crew browser (YouTube/bilibili); page shows buddy's browser. Buddy chat hidden, in Crew memory. Solo author. Backend, song-end hook, UI, 2 agents, 1 skill. Asks sessionApproval, hiddenSessions, chatSlots, browserSites, browser:view. Needs KiroCrew#39018, #39943, #40261, #40727."
+    },
+    {
+      "name": "alba",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/ggiallo28/kirocrew-alba-brief.git",
+        "ref": "v1.52.0"
+      },
+      "author": {
+        "name": "ggiallo28",
+        "url": "https://github.com/ggiallo28",
+        "kind": "person"
+      },
+      "categories": [
+        "productivity"
+      ],
+      "note": "Individual author; public repo, Apache-2.0, pinned to tag v1.52.0. Python backend (port 9187), 5-minute pipeline cron, MCP server with 15 tools (13 read-only), 2 agents, 4 skills; needs a trust grant. Read-only on connected apps; credentials in the OS secret store. Tested on macOS only."
     }
   ],
   "removed": [],
