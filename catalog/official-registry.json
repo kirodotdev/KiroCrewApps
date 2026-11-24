@@ -613,7 +613,7 @@
       "categories": [
         "productivity"
       ],
-      "note": "Individual author; public repo, Apache-2.0, pinned to tag v1.48.3. Python backend (port 9187), 5-minute pipeline cron, MCP server with 13 read-only tools, 2 agents, 4 skills; needs a trust grant. Read-only on connected apps; credentials in the OS secret store. Run on macOS; Linux/Windows untested."
+      "note": "Individual author; public repo, Apache-2.0, pinned to tag v1.49.0. Python backend (port 9187), 5-minute pipeline cron, MCP server with 13 read-only tools, 2 agents, 4 skills; needs a trust grant. Read-only on connected apps; credentials in the OS secret store. Run on macOS; Linux/Windows untested."
     }
   ],
   "removed": [],
