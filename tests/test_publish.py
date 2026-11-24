@@ -1526,6 +1526,10 @@ def test_publish_end_to_end_emits_verifiable_signed_artifacts(
     assert entry["displayName"] == "Demo App"
     assert entry["summary"] == "Does the demo thing."
     assert entry["author"] == {"name": "Demo Labs"}
+    committed = int(git("log", "-1", "--format=%ct", commit, cwd=repo))
+    assert entry["updatedAt"] == datetime.fromtimestamp(committed, timezone.utc).strftime(
+        "%Y-%m-%dT%H:%M:%SZ"
+    ), "a real publish dates the pinned commit"
     assert registry["revision"].endswith(
         publish.content_digest(
             {"apps": registry["apps"], "removed": [], "reinstated": []}
@@ -2944,6 +2948,127 @@ class TestBakesStarCounts:
             doc, publish.SCHEMA_DIR / "official-registry.schema.json", "pub", out
         )
         assert out.errors == [], out.errors
+
+
+# --------------------------------------------------------------------------
+# Commit dates
+# --------------------------------------------------------------------------
+
+
+class TestBakesCommitDates:
+    """`updatedAt` is GENERATED at publish from the pinned commit's date.
+
+    Like a star count, a date this run cannot vouch for publishes NO field and
+    only warns: one later than the run itself would sort the app above every
+    honest date on every publish.
+    """
+
+    NOW = datetime(2026, 11, 12, 9, 0, 0, tzinfo=timezone.utc)
+
+    def build(self, entry, dater, findings=None):
+        return publish.build_registry(
+            {"schemaVersion": 1, "apps": [entry]},
+            lambda url, ref: "a" * 40,
+            lambda url, commit, subdir=None: MANIFEST,
+            self.NOW,
+            findings if findings is not None else Findings(),
+            asset_digester=lambda url: "ab" * 32,
+            commit_dater=dater,
+        )
+
+    def test_git_entry_bakes_the_pinned_commits_date(self):
+        seen: list[tuple[str, str]] = []
+
+        def dater(url, commit):
+            seen.append((url, commit))
+            return datetime(2026, 10, 1, 12, 30, 5, tzinfo=timezone.utc)
+
+        doc = self.build(authored(url="https://github.com/o/r.git"), dater)
+        assert doc["apps"][0]["updatedAt"] == "2026-10-01T12:30:05Z"
+        assert seen == [("https://github.com/o/r.git", "a" * 40)]
+
+    def test_unreadable_date_omits_the_field_and_warns(self):
+        findings = Findings()
+        doc = self.build(authored(), lambda url, commit: None, findings)
+        assert "updatedAt" not in doc["apps"][0]
+        assert findings.errors == []
+        assert any("updatedAt" in w for w in findings.warnings)
+
+    def test_date_later_than_the_run_omits_the_field_and_warns(self):
+        findings = Findings()
+        future = self.NOW.replace(year=2030)
+        doc = self.build(authored(), lambda url, commit: future, findings)
+        assert "updatedAt" not in doc["apps"][0]
+        assert findings.errors == []
+        assert any("later than this run" in w for w in findings.warnings)
+
+    def test_no_dater_means_no_field_and_no_warning(self):
+        """A dry run injects no dater; that is silence, not a degraded read."""
+        findings = Findings()
+        doc = self.build(authored(), None, findings)
+        assert "updatedAt" not in doc["apps"][0]
+        assert not any("updatedAt" in w for w in findings.warnings)
+
+    def test_builtin_never_calls_the_dater(self):
+        def explode(url, commit):
+            raise AssertionError("a builtin pins no commit of its own")
+
+        doc = self.build(BUILTIN, explode)
+        assert "updatedAt" not in doc["apps"][0]
+
+    def test_release_never_calls_the_dater(self):
+        """A release publishes as an archive; only a git entry pins a commit."""
+        def explode(url, commit):
+            raise AssertionError("a release entry is not dated")
+
+        doc = self.build(authored_release(), explode)
+        assert "updatedAt" not in doc["apps"][0]
+
+    def test_published_schema_accepts_the_field_and_rejects_a_non_date(self):
+        from validate import check_schema
+
+        doc = self.build(
+            authored(url="https://github.com/o/r.git"),
+            lambda url, commit: datetime(2026, 10, 1, tzinfo=timezone.utc),
+        )
+        schema = publish.SCHEMA_DIR / "official-registry.schema.json"
+        out = Findings()
+        check_schema(doc, schema, "pub", out)
+        assert out.errors == [], out.errors
+
+        doc["apps"][0]["updatedAt"] = "last tuesday"
+        out = Findings()
+        check_schema(doc, schema, "pub", out)
+        assert any("updatedAt" in e for e in out.errors), out.errors
+
+    def test_fetch_commit_date_reads_the_real_commit(self, tmp_path, allow_local_urls):
+        repo = tmp_path / "repo"
+        make_repo(repo, MANIFEST)
+        # Move the AUTHOR date only, so reading `%at` instead of `%ct` fails.
+        git("commit", "--amend", "--quiet", "--no-edit",
+            "--date=2001-01-01T00:00:00+0000", cwd=repo)
+        commit = git("rev-parse", "HEAD", cwd=repo)
+        expected = int(git("log", "-1", "--format=%ct", commit, cwd=repo))
+        got = publish.fetch_commit_date(str(repo), commit)
+        assert got == datetime.fromtimestamp(expected, timezone.utc)
+        assert got.year != 2001
+
+    def test_fetch_commit_date_degrades_when_the_commit_is_unreachable(
+        self, tmp_path, allow_local_urls
+    ):
+        repo = tmp_path / "repo"
+        make_repo(repo, MANIFEST)
+        assert publish.fetch_commit_date(str(repo), "c" * 40) is None
+
+    @pytest.mark.parametrize("raw", ["", "abc\n", "9" * 30 + "\n", "253402300800\n"])
+    def test_fetch_commit_date_degrades_on_an_unparseable_date(
+        self, tmp_path, monkeypatch, raw
+    ):
+        """A hostile host can serve a commit whose date is empty or out of
+        range; that must read as unknown, not halt every app's release."""
+        monkeypatch.setattr(publish, "fetched_repo", lambda url, commit: tmp_path)
+        monkeypatch.setattr(publish, "run_git", lambda args, cwd=None: raw)
+        assert publish.fetch_commit_date("https://example.com/a.git", "a" * 40) is None
 
 
 class TestFetchGithubStars:

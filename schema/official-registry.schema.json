@@ -101,6 +101,11 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
+        "updatedAt": {
+          "description": "GENERATED at publish, git entries only: the committer date (UTC) of the commit `source.ref` pins, which a store can sort by as \"recently updated\". Absent means UNKNOWN (unreadable, or dated later than the publish run), never \"old\".",
+          "type": "string",
+          "format": "date-time"
+        },
         "iconRef": {
           "description": "Path to the app's icon, never a URL. A builtin names an absolute client-local path (/app-assets/<app>/icon.svg) whose bytes it already ships. Every other source's icon is INGESTED at publish time and this is a catalog-relative content-addressed path (assets/icons/<sha256>.<ext>): the filename IS the digest of the bytes, and it appears in this signed document, so a client that verifies the signature and then hashes what it downloaded has end-to-end integrity for every icon from one signature. Hosting the bytes also takes the publisher's repository off the render path, which is what a per-icon clone through a proxy used to require.",
           "type": "string",
