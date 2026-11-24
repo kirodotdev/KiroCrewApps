@@ -597,6 +597,23 @@
         "other"
       ],
       "note": "Mood-matched songs in Crew browser (YouTube/bilibili); page shows buddy's browser. Buddy chat hidden, in Crew memory. Solo author. Backend, song-end hook, UI, 2 agents, 1 skill. Asks sessionApproval, hiddenSessions, chatSlots, browserSites, browser:view. Needs KiroCrew#39018, #39943, #40261, #40727."
+    },
+    {
+      "name": "agent-rd-team",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/JiaDe-Wu/agent-rd-team",
+        "ref": "279f55ed3c990b0f24856f52808e399599172e30"
+      },
+      "author": {
+        "name": "JiaDe-Wu",
+        "url": "https://github.com/JiaDe-Wu",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Individual author; public repo, Apache-2.0, pinned to the v0.11.0 commit. In-process Python backend; needs a trust grant. Asks sessionApproval to put its own role sessions in Trust mode; runs their checks, site and git under the standard sandbox (0.13.0+). Chinese prompts; macOS/Linux, git, Node 22."
     }
   ],
   "removed": [],
