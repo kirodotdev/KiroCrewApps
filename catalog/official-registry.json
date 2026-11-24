@@ -603,7 +603,7 @@
       "source": {
         "type": "git",
         "url": "https://github.com/ggiallo28/kirocrew-alba-brief.git",
-        "ref": "v1.49.0"
+        "ref": "v1.52.0"
       },
       "author": {
         "name": "ggiallo28",
@@ -613,7 +613,7 @@
       "categories": [
         "productivity"
       ],
-      "note": "Individual author; public repo, Apache-2.0, pinned to tag v1.49.0. Python backend (port 9187), 5-minute pipeline cron, MCP server with 13 read-only tools, 2 agents, 4 skills; needs a trust grant. Read-only on connected apps; credentials in the OS secret store. Run on macOS; Linux/Windows untested."
+      "note": "Individual author; public repo, Apache-2.0, pinned to tag v1.52.0. Python backend (port 9187), 5-minute pipeline cron, MCP server with 15 tools (13 read-only), 2 agents, 4 skills; needs a trust grant. Read-only on connected apps; credentials in the OS secret store. Tested on macOS only."
     }
   ],
   "removed": [],
