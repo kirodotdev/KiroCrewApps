@@ -613,7 +613,7 @@
       "categories": [
         "productivity"
       ],
-      "note": "Individual author; public repo. Daily-brief app reading Gmail, Slack, Calendar, Drive, GitHub, Notion, Linear, Trello, Outlook, LinkedIn and more, one block per space, with a chat companion that answers questions about past briefs and an animated mascot. Read-only on every connected app."
+      "note": "Individual author; public repo, Apache-2.0, pinned to tag v1.48.3. Python backend (port 9187), 5-minute pipeline cron, MCP server with 13 read-only tools, 2 agents, 4 skills; needs a trust grant. Read-only on connected apps; credentials in the OS secret store. Run on macOS; Linux/Windows untested."
     }
   ],
   "removed": [],
