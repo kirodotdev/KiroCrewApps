@@ -479,6 +479,23 @@
       "note": "Cross-session work overview (Needs you / Running / Done) with a private Conductor panel; public repo."
     },
     {
+      "name": "crew-pulse",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/ivikash/KiroCrew-Pulse",
+        "ref": "713b77a8bd23f9cb01786aa1046fc57ef8f9f624"
+      },
+      "author": {
+        "name": "Vikash Agrawal",
+        "url": "https://github.com/ivikash",
+        "kind": "person"
+      },
+      "categories": [
+        "agents-automation"
+      ],
+      "note": "Individual author; public repo, Apache-2.0, pinned to the main commit the author chose. UI only: no backend, agents, skills, cron, hooks, MCP or install scripts. NOT read-only: on its page the owner approves or rejects pending tool calls, answers question cards and sends messages to their sessions."
+    },
+    {
       "name": "endless-worlds",
       "source": {
         "type": "git",
