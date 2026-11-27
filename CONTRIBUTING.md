@@ -148,8 +148,9 @@ because the remedies differ — a bad entry is an edit here, a bad app is a tomb
 ## Security issues
 
 **Do not** report security vulnerabilities through public GitHub issues. See
-[SECURITY.md](SECURITY.md) for responsible disclosure instructions and for what is
-in scope, since a listed third-party app is not.
+[SECURITY.md](SECURITY.md) for responsible disclosure instructions. A vulnerability
+in a listed third-party app belongs to that app's own project; if a listed app is
+malicious, report it here as a catalog problem so its entry can be tombstoned.
 
 ## Code of Conduct
 

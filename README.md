@@ -356,8 +356,7 @@ unsigned.
 listing an app requires, what to run before opening a pull request, and how the
 review lanes read [AUTOSDE.yaml](AUTOSDE.yaml). Report problems as a
 [GitHub issue](https://github.com/kirodotdev/KiroCrewApps/issues); report
-vulnerabilities privately per [SECURITY.md](SECURITY.md), which also says why a
-listed third-party app is out of scope.
+vulnerabilities privately per [SECURITY.md](SECURITY.md).
 
 ## License
 
