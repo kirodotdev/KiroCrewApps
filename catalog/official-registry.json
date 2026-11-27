@@ -597,6 +597,23 @@
         "other"
       ],
       "note": "Mood-matched songs in Crew browser (YouTube, bilibili, Spotify, Amazon/Apple Music, SoundCloud). Buddy chat hidden. Solo author. Backend, song-end hook, UI, 2 agents, 1 skill. Asks sessionApproval, hiddenSessions, chatSlots, browserSites, browserRecipes (opt-in), browser:view. Needs Crew 0.14.0+."
+    },
+    {
+      "name": "kiro-code-reviewer",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/KiroCrewCaptain/kirocrew-app-kiro-reviewer",
+        "ref": "a3fecbebaae949a3b48105814cbe4ea99498bced"
+      },
+      "categories": [
+        "developer-tools"
+      ],
+      "author": {
+        "name": "Kiro Crew",
+        "url": "https://github.com/KiroCrewCaptain",
+        "kind": "org"
+      },
+      "note": "New first-party app. Pre-PR AI code review on the Kiro review service: page, MCP tools, code-review skill and a gateway route hook. The page uses Crew's Kiro sign-in; the MCP tools need a Kiro API key."
     }
   ],
   "removed": [],
